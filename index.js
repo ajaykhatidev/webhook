@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const crypto = require('crypto');
 const bodyParser = require('body-parser');
@@ -8,13 +9,77 @@ const port = process.env.PORT || 3000;
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
+// CORS middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+});
+
 // Configuration - Replace with your actual values
-const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'your_verify_token_here';
-const APP_SECRET = process.env.APP_SECRET || 'your_app_secret_here';
+const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'test_webhook_token_123';
+const APP_SECRET = process.env.APP_SECRET || 'test_app_secret_456';
 
 // Basic route
 app.get('/', (req, res) => {
   res.send('Facebook Webhook Server is running!');
+});
+
+// In-memory storage for leads (in production, use a database)
+let leads = [];
+
+// API endpoint to get leads
+app.get('/api/leads', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: leads,
+      count: leads.length
+    });
+  } catch (error) {
+    console.error('Error fetching leads:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch leads'
+    });
+  }
+});
+
+// API endpoint to add a lead manually (for testing)
+app.post('/api/leads', (req, res) => {
+  try {
+    const { name, email, phone, source, message } = req.body;
+    
+    const newLead = {
+      id: Date.now(),
+      name: name || 'Unknown',
+      email: email || '',
+      phone: phone || '',
+      source: source || 'Manual Entry',
+      status: 'New',
+      message: message || '',
+      createdAt: new Date().toISOString()
+    };
+    
+    leads.unshift(newLead); // Add to beginning of array
+    
+    res.json({
+      success: true,
+      data: newLead
+    });
+  } catch (error) {
+    console.error('Error adding lead:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to add lead'
+    });
+  }
 });
 
 // Facebook Webhook Verification Endpoint
@@ -53,21 +118,33 @@ app.post('/webhook', (req, res) => {
     // Handle Page events
     body.entry.forEach(entry => {
       entry.changes.forEach(change => {
-        handlePageChange(change, entry);
+        const lead = handlePageChange(change, entry);
+        if (lead) {
+          leads.unshift(lead); // Add new lead to the beginning
+          console.log('New lead added:', lead);
+        }
       });
     });
   } else if (body.object === 'user') {
     // Handle User events
     body.entry.forEach(entry => {
       entry.changes.forEach(change => {
-        handleUserChange(change, entry);
+        const lead = handleUserChange(change, entry);
+        if (lead) {
+          leads.unshift(lead);
+          console.log('New lead added:', lead);
+        }
       });
     });
   } else if (body.object === 'instagram') {
     // Handle Instagram events
     body.entry.forEach(entry => {
       entry.changes.forEach(change => {
-        handleInstagramChange(change, entry);
+        const lead = handleInstagramChange(change, entry);
+        if (lead) {
+          leads.unshift(lead);
+          console.log('New lead added:', lead);
+        }
       });
     });
   }
@@ -101,18 +178,19 @@ function handlePageChange(change, entry) {
   switch (change.field) {
     case 'feed':
       console.log('New post or comment on page feed');
-      break;
+      return createLeadFromPageChange(change, entry, 'Page Feed');
     case 'posts':
       console.log('New post published');
-      break;
+      return createLeadFromPageChange(change, entry, 'Page Post');
     case 'comments':
       console.log('New comment received');
-      break;
+      return createLeadFromPageChange(change, entry, 'Page Comment');
     case 'messages':
       console.log('New message received');
-      break;
+      return createLeadFromPageChange(change, entry, 'Page Message');
     default:
       console.log(`Unhandled page field: ${change.field}`);
+      return null;
   }
 }
 
@@ -128,18 +206,19 @@ function handleUserChange(change, entry) {
   switch (change.field) {
     case 'email':
       console.log('User email changed');
-      break;
+      return createLeadFromUserChange(change, entry, 'User Email');
     case 'name':
       console.log('User name changed');
-      break;
+      return createLeadFromUserChange(change, entry, 'User Name');
     case 'photos':
       console.log('User uploaded new photo');
-      break;
+      return createLeadFromUserChange(change, entry, 'User Photo');
     case 'feed':
       console.log('User posted something');
-      break;
+      return createLeadFromUserChange(change, entry, 'User Feed');
     default:
       console.log(`Unhandled user field: ${change.field}`);
+      return null;
   }
 }
 
@@ -155,16 +234,75 @@ function handleInstagramChange(change, entry) {
   switch (change.field) {
     case 'media':
       console.log('New Instagram media posted');
-      break;
+      return createLeadFromInstagramChange(change, entry, 'Instagram Media');
     case 'comments':
       console.log('New Instagram comment');
-      break;
+      return createLeadFromInstagramChange(change, entry, 'Instagram Comment');
     case 'mentions':
       console.log('Instagram mention received');
-      break;
+      return createLeadFromInstagramChange(change, entry, 'Instagram Mention');
     default:
       console.log(`Unhandled Instagram field: ${change.field}`);
+      return null;
   }
+}
+
+// Helper functions to create lead objects from webhook events
+function createLeadFromPageChange(change, entry, source) {
+  const value = change.value;
+  return {
+    id: Date.now() + Math.random(),
+    name: value.from?.name || 'Unknown User',
+    email: value.email || '',
+    phone: value.phone || '',
+    source: source,
+    status: 'New',
+    message: value.message || value.text || 'Page interaction',
+    createdAt: new Date().toISOString(),
+    metadata: {
+      pageId: entry.id,
+      field: change.field,
+      rawData: value
+    }
+  };
+}
+
+function createLeadFromUserChange(change, entry, source) {
+  const value = change.value;
+  return {
+    id: Date.now() + Math.random(),
+    name: value.name || 'Unknown User',
+    email: value.email || '',
+    phone: value.phone || '',
+    source: source,
+    status: 'New',
+    message: `User ${change.field} updated`,
+    createdAt: new Date().toISOString(),
+    metadata: {
+      userId: entry.uid,
+      field: change.field,
+      rawData: value
+    }
+  };
+}
+
+function createLeadFromInstagramChange(change, entry, source) {
+  const value = change.value;
+  return {
+    id: Date.now() + Math.random(),
+    name: value.from?.username || 'Unknown User',
+    email: value.email || '',
+    phone: value.phone || '',
+    source: source,
+    status: 'New',
+    message: value.text || value.caption || 'Instagram interaction',
+    createdAt: new Date().toISOString(),
+    metadata: {
+      instagramId: entry.id,
+      field: change.field,
+      rawData: value
+    }
+  };
 }
 
 // Error handling middleware

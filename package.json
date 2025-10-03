@@ -4,15 +4,17 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "test": "node test-webhook.js",
+    "dev": "node index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "express": "^5.1.0",
+    "body-parser": "^1.20.2",
     "crypto": "^1.0.1",
-    "body-parser": "^1.20.2"
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0"
   }
 }
