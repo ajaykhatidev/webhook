@@ -10,7 +10,7 @@ const app = express();
 const PORT = 3000;
 const VERIFY_TOKEN = 'test_webhook_token_123';
 const APP_SECRET = 'test_app_secret_456';
-const PAGE_ACCESS_TOKEN = 'your_page_access_token_here';
+const PAGE_ACCESS_TOKEN = 'EAA9cHXKlaPMBPuAvUeZA6vn1ZCSj6ZATrPkUaWVprYLBGzOiaSAn10zHUHHgxXgHRZAf75Y6qtF9ZAuGnnCHc1XQDQu2yetwbur852SE3l36Bg04MxhAxDYessr3fWaTZCjictyuRYF7JyweIWjEGhAj46cjM8yWgBAo2ezBdczOaGKlTGOmDqGoUDu3b021ZCO4rM3AMecXZCJEMieQOr8OUwDnhygTgcRGRo2EDkJKsBHzrZCXhkvJswGDmc7oZD';
 const PAGE_ID = '773204715868903';
 const LEADS_FILE = 'leads.json';
 
