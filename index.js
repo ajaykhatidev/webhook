@@ -9,7 +9,8 @@ const { MongoClient } = require('mongodb');
 const app = express();
 const PORT = 3000;
 const VERIFY_TOKEN = 'test_webhook_token_123';
-const APP_SECRET = 'test_app_secret_456';
+const APP_SECRET = 'df166b73e390b94e9088391d0605fd83';
+const APP_ID = '4323406197909747';
 const PAGE_ACCESS_TOKEN = 'EAA9cHXKlaPMBPuAvUeZA6vn1ZCSj6ZATrPkUaWVprYLBGzOiaSAn10zHUHHgxXgHRZAf75Y6qtF9ZAuGnnCHc1XQDQu2yetwbur852SE3l36Bg04MxhAxDYessr3fWaTZCjictyuRYF7JyweIWjEGhAj46cjM8yWgBAo2ezBdczOaGKlTGOmDqGoUDu3b021ZCO4rM3AMecXZCJEMieQOr8OUwDnhygTgcRGRo2EDkJKsBHzrZCXhkvJswGDmc7oZD';
 const PAGE_ID = '773204715868903';
 const LEADS_FILE = 'leads.json';
@@ -37,7 +38,7 @@ async function connectToMongoDB() {
 
 // Middleware
 app.use(bodyParser.json());
- // Serve static files (for frontend)
+// Serve static files (for frontend)
 
 // CORS middleware
 app.use((req, res, next) => {
@@ -285,5 +286,9 @@ app.listen(PORT, async () => {
   // Connect to MongoDB
   await connectToMongoDB();
   
+  console.log('Facebook App configured:');
+  console.log(`App ID: ${APP_ID}`);
+  console.log(`App Secret: ${APP_SECRET.substring(0, 8)}...`);
+  console.log(`Page ID: ${PAGE_ID}`);
   console.log('MongoDB connection configured with password: ajayKhati');
 });
