@@ -1,13 +1,43 @@
 require('dotenv').config();
 const express = require('express');
-const crypto = require('crypto');
 const bodyParser = require('body-parser');
+const CryptoJS = require('crypto-js');
+const fs = require('fs');
+const fetch = require('node-fetch');
+const { MongoClient } = require('mongodb');
+
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = 3000;
+const VERIFY_TOKEN = 'test_webhook_token_123';
+const APP_SECRET = 'test_app_secret_456';
+const PAGE_ACCESS_TOKEN = 'your_page_access_token_here';
+const PAGE_ID = '773204715868903';
+const LEADS_FILE = 'leads.json';
+
+// MongoDB configuration
+const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/';
+const DB_NAME = 'webhook_leads';
+const COLLECTION_NAME = 'leads';
+
+let db = null;
+let client = null;
+
+// Connect to MongoDB
+async function connectToMongoDB() {
+  try {
+    client = new MongoClient(MONGODB_URI);
+    await client.connect();
+    db = client.db(DB_NAME);
+    console.log('✅ Connected to MongoDB');
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error);
+    db = null;
+  }
+}
 
 // Middleware
 app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+ // Serve static files (for frontend)
 
 // CORS middleware
 app.use((req, res, next) => {
@@ -22,25 +52,151 @@ app.use((req, res, next) => {
   }
 });
 
-// Configuration - Replace with your actual values
-const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'test_webhook_token_123';
-const APP_SECRET = process.env.APP_SECRET || 'test_app_secret_456';
+// Load leads from file or initialize empty array (fallback)
+let leads = [];
+if (fs.existsSync(LEADS_FILE)) {
+  try {
+    leads = JSON.parse(fs.readFileSync(LEADS_FILE, 'utf8'));
+  } catch (error) {
+    console.error('Error loading leads file:', error);
+    leads = [];
+  }
+}
 
 // Basic route
 app.get('/', (req, res) => {
   res.send('Facebook Webhook Server is running!');
 });
 
-// In-memory storage for leads (in production, use a database)
-let leads = [];
+// Webhook verification (GET /webhook)
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
 
-// API endpoint to get leads
-app.get('/api/leads', (req, res) => {
+  console.log('Webhook verification request:', { mode, token, challenge });
+
+  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('Webhook verified successfully!');
+    res.status(200).send(challenge);
+  } else {
+    console.log('Webhook verification failed');
+    res.sendStatus(403);
+  }
+});
+
+// Receive lead notifications (POST /webhook)
+app.post('/webhook', (req, res) => {
+  const body = req.body;
+  const signature = req.headers['x-hub-signature-256'];
+
+  console.log('Received webhook event:', JSON.stringify(body, null, 2));
+
+  // Verify signature
+  if (signature && APP_SECRET) {
+    const elements = signature.split('=');
+    const method = elements[0];
+    const signatureHash = elements[1];
+    const expectedHash = CryptoJS.HmacSHA256(JSON.stringify(body), APP_SECRET).toString(CryptoJS.enc.Hex);
+
+    if (method !== 'sha256' || signatureHash !== expectedHash) {
+      console.error('Invalid signature');
+      return res.sendStatus(401);
+    }
+  }
+
+  // Process lead event
+  if (body.object === 'page') {
+    body.entry.forEach(entry => {
+      entry.changes.forEach(change => {
+        if (change.field === 'leadgen') {
+          const leadgenId = change.value.leadgen_id;
+          console.log(`New lead received: ${leadgenId}`);
+          fetchLeadDetails(leadgenId);
+        }
+      });
+    });
+  }
+
+  res.status(200).send('EVENT_RECEIVED');
+});
+
+// Fetch full lead details from Graph API and save to MongoDB
+async function fetchLeadDetails(leadgenId) {
+  if (!PAGE_ACCESS_TOKEN || PAGE_ACCESS_TOKEN === 'your_page_access_token_here') {
+    console.error('PAGE_ACCESS_TOKEN not set, cannot fetch lead details');
+    return;
+  }
+
   try {
+    const response = await fetch(`https://graph.facebook.com/v23.0/${leadgenId}?access_token=${PAGE_ACCESS_TOKEN}`);
+    const leadData = await response.json();
+    if (leadData.error) {
+      throw new Error(leadData.error.message);
+    }
+
+    // Save to MongoDB if available
+    if (db) {
+      try {
+        const leadDocument = {
+          lead_id: leadData.id,
+          ad_id: leadData.ad_id,
+          form_id: leadData.form_id,
+          created_time: new Date(leadData.created_time),
+          field_data: leadData.field_data,
+          platform: 'facebook',
+          source: 'leadgen_webhook',
+          raw_data: leadData,
+          created_at: new Date()
+        };
+
+        const result = await db.collection(COLLECTION_NAME).insertOne(leadDocument);
+        console.log('Lead saved to MongoDB:', result.insertedId);
+      } catch (mongoError) {
+        console.error('MongoDB insert error:', mongoError);
+        // Fallback to local file storage
+        saveToLocalFile(leadData);
+      }
+    } else {
+      console.log('MongoDB not connected, saving to local file');
+      saveToLocalFile(leadData);
+    }
+
+  } catch (error) {
+    console.error('Error fetching lead:', error);
+  }
+}
+
+// Fallback function to save leads locally
+function saveToLocalFile(leadData) {
+  leads.unshift(leadData);  // Add to beginning for newest first
+  fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2));
+  console.log('Lead saved to local file:', leadData);
+}
+
+// API endpoint to get all leads (from MongoDB or local file)
+app.get('/api/leads', async (req, res) => {
+  try {
+    let leadsData = [];
+
+    if (db) {
+      try {
+        const cursor = db.collection(COLLECTION_NAME).find({}).sort({ created_at: -1 });
+        leadsData = await cursor.toArray();
+      } catch (mongoError) {
+        console.error('MongoDB fetch error:', mongoError);
+        // Fallback to local data
+        leadsData = leads;
+      }
+    } else {
+      leadsData = leads;
+    }
+
     res.json({
       success: true,
-      data: leads,
-      count: leads.length
+      data: leadsData,
+      count: leadsData.length,
+      source: db ? 'mongodb' : 'local'
     });
   } catch (error) {
     console.error('Error fetching leads:', error);
@@ -52,7 +208,7 @@ app.get('/api/leads', (req, res) => {
 });
 
 // API endpoint to add a lead manually (for testing)
-app.post('/api/leads', (req, res) => {
+app.post('/api/leads', async (req, res) => {
   try {
     const { name, email, phone, source, message } = req.body;
     
@@ -64,10 +220,41 @@ app.post('/api/leads', (req, res) => {
       source: source || 'Manual Entry',
       status: 'New',
       message: message || '',
-      createdAt: new Date().toISOString()
+      created_time: new Date().toISOString(),
+      field_data: [
+        { name: 'full_name', values: [name || 'Unknown'] },
+        { name: 'email', values: [email || ''] },
+        { name: 'phone_number', values: [phone || ''] }
+      ]
     };
-    
-    leads.unshift(newLead); // Add to beginning of array
+
+    // Save to MongoDB if available
+    if (db) {
+      try {
+        const leadDocument = {
+          lead_id: newLead.id.toString(),
+          ad_id: null,
+          form_id: null,
+          created_time: new Date(newLead.created_time),
+          field_data: newLead.field_data,
+          platform: 'manual',
+          source: newLead.source,
+          raw_data: newLead,
+          created_at: new Date()
+        };
+
+        const result = await db.collection(COLLECTION_NAME).insertOne(leadDocument);
+        console.log('Manual lead saved to MongoDB:', result.insertedId);
+      } catch (mongoError) {
+        console.error('MongoDB insert error:', mongoError);
+        // Fallback to local storage
+        leads.unshift(newLead);
+        fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2));
+      }
+    } else {
+      leads.unshift(newLead);
+      fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2));
+    }
     
     res.json({
       success: true,
@@ -82,237 +269,21 @@ app.post('/api/leads', (req, res) => {
   }
 });
 
-// Facebook Webhook Verification Endpoint
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  console.log('Webhook verification request:', { mode, token, challenge });
-
-  // Check if verification token matches
-  if (mode === 'subscribe' && token === WEBHOOK_VERIFY_TOKEN) {
-    console.log('Webhook verified successfully');
-    res.status(200).send(challenge);
-  } else {
-    console.log('Webhook verification failed');
-    res.status(403).send('Forbidden');
-  }
-});
-
-// Facebook Webhook Event Handler
-app.post('/webhook', (req, res) => {
-  const body = req.body;
-  
-  console.log('Received webhook event:', JSON.stringify(body, null, 2));
-
-  // Verify webhook signature (optional but recommended for production)
-  const signature = req.headers['x-hub-signature-256'];
-  if (signature && !verifyWebhookSignature(body, signature)) {
-    console.log('Invalid webhook signature');
-    return res.status(403).send('Invalid signature');
-  }
-
-  // Process different types of webhook events
-  if (body.object === 'page') {
-    // Handle Page events
-    body.entry.forEach(entry => {
-      entry.changes.forEach(change => {
-        const lead = handlePageChange(change, entry);
-        if (lead) {
-          leads.unshift(lead); // Add new lead to the beginning
-          console.log('New lead added:', lead);
-        }
-      });
-    });
-  } else if (body.object === 'user') {
-    // Handle User events
-    body.entry.forEach(entry => {
-      entry.changes.forEach(change => {
-        const lead = handleUserChange(change, entry);
-        if (lead) {
-          leads.unshift(lead);
-          console.log('New lead added:', lead);
-        }
-      });
-    });
-  } else if (body.object === 'instagram') {
-    // Handle Instagram events
-    body.entry.forEach(entry => {
-      entry.changes.forEach(change => {
-        const lead = handleInstagramChange(change, entry);
-        if (lead) {
-          leads.unshift(lead);
-          console.log('New lead added:', lead);
-        }
-      });
-    });
-  }
-
-  res.status(200).send('OK');
-});
-
-// Webhook signature verification function
-function verifyWebhookSignature(body, signature) {
-  const expectedSignature = 'sha256=' + crypto
-    .createHmac('sha256', APP_SECRET)
-    .update(JSON.stringify(body))
-    .digest('hex');
-  
-  return crypto.timingSafeEqual(
-    Buffer.from(signature),
-    Buffer.from(expectedSignature)
-  );
-}
-
-// Event handlers for different object types
-function handlePageChange(change, entry) {
-  console.log('Page change detected:', {
-    field: change.field,
-    value: change.value,
-    pageId: entry.id,
-    time: entry.time
-  });
-
-  // Handle specific page field changes
-  switch (change.field) {
-    case 'feed':
-      console.log('New post or comment on page feed');
-      return createLeadFromPageChange(change, entry, 'Page Feed');
-    case 'posts':
-      console.log('New post published');
-      return createLeadFromPageChange(change, entry, 'Page Post');
-    case 'comments':
-      console.log('New comment received');
-      return createLeadFromPageChange(change, entry, 'Page Comment');
-    case 'messages':
-      console.log('New message received');
-      return createLeadFromPageChange(change, entry, 'Page Message');
-    default:
-      console.log(`Unhandled page field: ${change.field}`);
-      return null;
-  }
-}
-
-function handleUserChange(change, entry) {
-  console.log('User change detected:', {
-    field: change.field,
-    value: change.value,
-    userId: entry.uid,
-    time: entry.time
-  });
-
-  // Handle specific user field changes
-  switch (change.field) {
-    case 'email':
-      console.log('User email changed');
-      return createLeadFromUserChange(change, entry, 'User Email');
-    case 'name':
-      console.log('User name changed');
-      return createLeadFromUserChange(change, entry, 'User Name');
-    case 'photos':
-      console.log('User uploaded new photo');
-      return createLeadFromUserChange(change, entry, 'User Photo');
-    case 'feed':
-      console.log('User posted something');
-      return createLeadFromUserChange(change, entry, 'User Feed');
-    default:
-      console.log(`Unhandled user field: ${change.field}`);
-      return null;
-  }
-}
-
-function handleInstagramChange(change, entry) {
-  console.log('Instagram change detected:', {
-    field: change.field,
-    value: change.value,
-    instagramId: entry.id,
-    time: entry.time
-  });
-
-  // Handle specific Instagram field changes
-  switch (change.field) {
-    case 'media':
-      console.log('New Instagram media posted');
-      return createLeadFromInstagramChange(change, entry, 'Instagram Media');
-    case 'comments':
-      console.log('New Instagram comment');
-      return createLeadFromInstagramChange(change, entry, 'Instagram Comment');
-    case 'mentions':
-      console.log('Instagram mention received');
-      return createLeadFromInstagramChange(change, entry, 'Instagram Mention');
-    default:
-      console.log(`Unhandled Instagram field: ${change.field}`);
-      return null;
-  }
-}
-
-// Helper functions to create lead objects from webhook events
-function createLeadFromPageChange(change, entry, source) {
-  const value = change.value;
-  return {
-    id: Date.now() + Math.random(),
-    name: value.from?.name || 'Unknown User',
-    email: value.email || '',
-    phone: value.phone || '',
-    source: source,
-    status: 'New',
-    message: value.message || value.text || 'Page interaction',
-    createdAt: new Date().toISOString(),
-    metadata: {
-      pageId: entry.id,
-      field: change.field,
-      rawData: value
-    }
-  };
-}
-
-function createLeadFromUserChange(change, entry, source) {
-  const value = change.value;
-  return {
-    id: Date.now() + Math.random(),
-    name: value.name || 'Unknown User',
-    email: value.email || '',
-    phone: value.phone || '',
-    source: source,
-    status: 'New',
-    message: `User ${change.field} updated`,
-    createdAt: new Date().toISOString(),
-    metadata: {
-      userId: entry.uid,
-      field: change.field,
-      rawData: value
-    }
-  };
-}
-
-function createLeadFromInstagramChange(change, entry, source) {
-  const value = change.value;
-  return {
-    id: Date.now() + Math.random(),
-    name: value.from?.username || 'Unknown User',
-    email: value.email || '',
-    phone: value.phone || '',
-    source: source,
-    status: 'New',
-    message: value.text || value.caption || 'Instagram interaction',
-    createdAt: new Date().toISOString(),
-    metadata: {
-      instagramId: entry.id,
-      field: change.field,
-      rawData: value
-    }
-  };
-}
-
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error processing webhook:', err);
+  console.error('Error processing request:', err);
   res.status(500).send('Internal Server Error');
 });
 
-app.listen(port, () => {
-  console.log(`Facebook Webhook Server is running at http://localhost:${port}`);
-  console.log(`Webhook endpoint: http://localhost:${port}/webhook`);
-  console.log('Make sure to set WEBHOOK_VERIFY_TOKEN and APP_SECRET environment variables');
+// Start server
+app.listen(PORT, async () => {
+  console.log(`Facebook Webhook Server is running at http://localhost:${PORT}`);
+  console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
+  console.log(`API endpoint: http://localhost:${PORT}/api/leads`);
+  console.log(`Frontend: http://localhost:${PORT}/`);
+  
+  // Connect to MongoDB
+  await connectToMongoDB();
+  
+  console.log('MongoDB connection configured with password: ajayKhati');
 });
