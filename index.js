@@ -16,7 +16,7 @@ const PAGE_ID = '773204715868903';
 const LEADS_FILE = 'leads.json';
 
 // MongoDB configuration
-const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/';
+const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/leads';
 const DB_NAME = 'webhook_leads';
 const COLLECTION_NAME = 'leads';
 
