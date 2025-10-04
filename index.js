@@ -4,7 +4,7 @@ const bodyParser = require('body-parser');
 const CryptoJS = require('crypto-js');
 const fs = require('fs');
 const fetch = require('node-fetch');
-const { MongoClient } = require('mongodb');
+const mongoose = require('mongoose');
 
 const app = express();
 const PORT = 3000;
@@ -13,38 +13,111 @@ const APP_SECRET = 'df166b73e390b94e9088391d0605fd83';
 const APP_ID = '4323406197909747';
 const PAGE_ACCESS_TOKEN = 'EAA9cHXKlaPMBPuAvUeZA6vn1ZCSj6ZATrPkUaWVprYLBGzOiaSAn10zHUHHgxXgHRZAf75Y6qtF9ZAuGnnCHc1XQDQu2yetwbur852SE3l36Bg04MxhAxDYessr3fWaTZCjictyuRYF7JyweIWjEGhAj46cjM8yWgBAo2ezBdczOaGKlTGOmDqGoUDu3b021ZCO4rM3AMecXZCJEMieQOr8OUwDnhygTgcRGRo2EDkJKsBHzrZCXhkvJswGDmc7oZD';
 const PAGE_ID = '773204715868903';
+const BUSINESS_MANAGER_ID = '724005503729671';
 const LEADS_FILE = 'leads.json';
 
 // MongoDB configuration
-const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/leads';
-const DB_NAME = 'webhook_leads';
-const COLLECTION_NAME = 'leads';
+const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/webhook_leads';
 
-let db = null;
-let client = null;
+// Mongoose Schema for Lead
+const leadSchema = new mongoose.Schema({
+  lead_id: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  ad_id: {
+    type: String,
+    default: null
+  },
+  form_id: {
+    type: String,
+    default: null
+  },
+  created_time: {
+    type: Date,
+    required: true
+  },
+  field_data: [{
+    name: String,
+    values: [String]
+  }],
+  platform: {
+    type: String,
+    enum: ['facebook', 'instagram', 'manual'],
+    default: 'facebook'
+  },
+  source: {
+    type: String,
+    default: 'leadgen_webhook'
+  },
+  business_manager_id: {
+    type: String,
+    default: BUSINESS_MANAGER_ID
+  },
+  page_id: {
+    type: String,
+    default: PAGE_ID
+  },
+  raw_data: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
+  created_at: {
+    type: Date,
+    default: Date.now
+  },
+  updated_at: {
+    type: Date,
+    default: Date.now
+  }
+}, {
+  timestamps: true
+});
 
-// Connect to MongoDB
+// Add indexes for better performance
+leadSchema.index({ created_at: -1 });
+leadSchema.index({ platform: 1 });
+leadSchema.index({ lead_id: 1 });
+
+// Create Lead model
+const Lead = mongoose.model('Lead', leadSchema);
+
+// Connect to MongoDB using Mongoose
 async function connectToMongoDB() {
   try {
-    client = new MongoClient(MONGODB_URI);
-    await client.connect();
-    db = client.db(DB_NAME);
-    console.log('✅ Connected to MongoDB');
+    await mongoose.connect(MONGODB_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+    console.log('✅ Connected to MongoDB with Mongoose');
+    
+    // Test the connection
+    const leadCount = await Lead.countDocuments();
+    console.log(`📊 Current leads in database: ${leadCount}`);
+    
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
-    db = null;
+    mongoose.connection.close();
   }
 }
 
 // Middleware
 app.use(bodyParser.json());
-// Serve static files (for frontend)
 
 // CORS middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  // Add caching headers to prevent unnecessary refreshes
+  if (req.path === '/api/leads') {
+    res.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.header('Pragma', 'no-cache');
+    res.header('Expires', '0');
+  }
   
   if (req.method === 'OPTIONS') {
     res.sendStatus(200);
@@ -66,7 +139,7 @@ if (fs.existsSync(LEADS_FILE)) {
 
 // Basic route
 app.get('/', (req, res) => {
-  res.send('Facebook Webhook Server is running!');
+  res.send('Facebook Webhook Server is running with Mongoose!');
 });
 
 // Webhook verification (GET /webhook)
@@ -122,7 +195,7 @@ app.post('/webhook', (req, res) => {
   res.status(200).send('EVENT_RECEIVED');
 });
 
-// Fetch full lead details from Graph API and save to MongoDB
+// Fetch full lead details from Graph API and save to MongoDB using Mongoose
 async function fetchLeadDetails(leadgenId) {
   if (!PAGE_ACCESS_TOKEN || PAGE_ACCESS_TOKEN === 'your_page_access_token_here') {
     console.error('PAGE_ACCESS_TOKEN not set, cannot fetch lead details');
@@ -132,39 +205,42 @@ async function fetchLeadDetails(leadgenId) {
   try {
     const response = await fetch(`https://graph.facebook.com/v23.0/${leadgenId}?access_token=${PAGE_ACCESS_TOKEN}`);
     const leadData = await response.json();
+    
     if (leadData.error) {
       throw new Error(leadData.error.message);
     }
 
-    // Save to MongoDB if available
-    if (db) {
-      try {
-        const leadDocument = {
-          lead_id: leadData.id,
-          ad_id: leadData.ad_id,
-          form_id: leadData.form_id,
-          created_time: new Date(leadData.created_time),
-          field_data: leadData.field_data,
-          platform: 'facebook',
-          source: 'leadgen_webhook',
-          raw_data: leadData,
-          created_at: new Date()
-        };
-
-        const result = await db.collection(COLLECTION_NAME).insertOne(leadDocument);
-        console.log('Lead saved to MongoDB:', result.insertedId);
-      } catch (mongoError) {
-        console.error('MongoDB insert error:', mongoError);
-        // Fallback to local file storage
-        saveToLocalFile(leadData);
-      }
-    } else {
-      console.log('MongoDB not connected, saving to local file');
-      saveToLocalFile(leadData);
+    // Check if lead already exists
+    const existingLead = await Lead.findOne({ lead_id: leadData.id });
+    if (existingLead) {
+      console.log(`Lead ${leadData.id} already exists, skipping duplicate`);
+      return;
     }
 
+    // Create new lead using Mongoose
+    const newLead = new Lead({
+      lead_id: leadData.id,
+      ad_id: leadData.ad_id,
+      form_id: leadData.form_id,
+      created_time: new Date(leadData.created_time),
+      field_data: leadData.field_data,
+      platform: 'facebook',
+      source: 'leadgen_webhook',
+      business_manager_id: BUSINESS_MANAGER_ID,
+      page_id: PAGE_ID,
+      raw_data: leadData
+    });
+
+    const savedLead = await newLead.save();
+    console.log('✅ Lead saved to MongoDB with Mongoose:', savedLead._id);
+    
+    // Also save to local file as backup
+    saveToLocalFile(leadData);
+
   } catch (error) {
-    console.error('Error fetching lead:', error);
+    console.error('Error fetching/saving lead:', error);
+    // Fallback to local file storage
+    saveToLocalFile(leadData);
   }
 }
 
@@ -175,29 +251,40 @@ function saveToLocalFile(leadData) {
   console.log('Lead saved to local file:', leadData);
 }
 
-// API endpoint to get all leads (from MongoDB or local file)
+// API endpoint to get all leads (from MongoDB using Mongoose)
 app.get('/api/leads', async (req, res) => {
   try {
     let leadsData = [];
 
-    if (db) {
+    if (mongoose.connection.readyState === 1) {
       try {
-        const cursor = db.collection(COLLECTION_NAME).find({}).sort({ created_at: -1 });
-        leadsData = await cursor.toArray();
+        // Use Mongoose to fetch leads with optimized query
+        leadsData = await Lead.find({})
+          .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
+          .sort({ created_at: -1 })
+          .lean(); // Use lean() for better performance
+        
+        console.log(`📊 Fetched ${leadsData.length} leads from MongoDB`);
       } catch (mongoError) {
-        console.error('MongoDB fetch error:', mongoError);
+        console.error('Mongoose fetch error:', mongoError);
         // Fallback to local data
         leadsData = leads;
       }
     } else {
+      console.log('MongoDB not connected, using local data');
       leadsData = leads;
     }
 
+    // Add timestamp for frontend caching
+    const timestamp = new Date().toISOString();
+    
     res.json({
       success: true,
       data: leadsData,
       count: leadsData.length,
-      source: db ? 'mongodb' : 'local'
+      source: mongoose.connection.readyState === 1 ? 'mongodb' : 'local',
+      timestamp: timestamp,
+      lastModified: leadsData.length > 0 ? leadsData[0].created_at : timestamp
     });
   } catch (error) {
     console.error('Error fetching leads:', error);
@@ -208,58 +295,39 @@ app.get('/api/leads', async (req, res) => {
   }
 });
 
-// API endpoint to add a lead manually (for testing)
+// API endpoint to add a lead manually (for testing) using Mongoose
 app.post('/api/leads', async (req, res) => {
   try {
     const { name, email, phone, source, message } = req.body;
     
-    const newLead = {
-      id: Date.now(),
-      name: name || 'Unknown',
-      email: email || '',
-      phone: phone || '',
-      source: source || 'Manual Entry',
-      status: 'New',
-      message: message || '',
-      created_time: new Date().toISOString(),
+    const newLead = new Lead({
+      lead_id: Date.now().toString(),
+      ad_id: null,
+      form_id: null,
+      created_time: new Date(),
       field_data: [
         { name: 'full_name', values: [name || 'Unknown'] },
         { name: 'email', values: [email || ''] },
         { name: 'phone_number', values: [phone || ''] }
-      ]
-    };
-
-    // Save to MongoDB if available
-    if (db) {
-      try {
-        const leadDocument = {
-          lead_id: newLead.id.toString(),
-          ad_id: null,
-          form_id: null,
-          created_time: new Date(newLead.created_time),
-          field_data: newLead.field_data,
-          platform: 'manual',
-          source: newLead.source,
-          raw_data: newLead,
-          created_at: new Date()
-        };
-
-        const result = await db.collection(COLLECTION_NAME).insertOne(leadDocument);
-        console.log('Manual lead saved to MongoDB:', result.insertedId);
-      } catch (mongoError) {
-        console.error('MongoDB insert error:', mongoError);
-        // Fallback to local storage
-        leads.unshift(newLead);
-        fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2));
+      ],
+      platform: 'manual',
+      source: source || 'Manual Entry',
+      business_manager_id: BUSINESS_MANAGER_ID,
+      page_id: PAGE_ID,
+      raw_data: {
+        name: name || 'Unknown',
+        email: email || '',
+        phone: phone || '',
+        message: message || ''
       }
-    } else {
-      leads.unshift(newLead);
-      fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2));
-    }
+    });
+
+    const savedLead = await newLead.save();
+    console.log('✅ Manual lead saved to MongoDB with Mongoose:', savedLead._id);
     
     res.json({
       success: true,
-      data: newLead
+      data: savedLead
     });
   } catch (error) {
     console.error('Error adding lead:', error);
@@ -270,10 +338,70 @@ app.post('/api/leads', async (req, res) => {
   }
 });
 
+// API endpoint to get lead statistics
+app.get('/api/stats', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not connected'
+      });
+    }
+
+    const stats = await Lead.aggregate([
+      {
+        $group: {
+          _id: '$platform',
+          count: { $sum: 1 },
+          latest: { $max: '$created_at' }
+        }
+      }
+    ]);
+
+    const totalLeads = await Lead.countDocuments();
+    const todayLeads = await Lead.countDocuments({
+      created_at: {
+        $gte: new Date(new Date().setHours(0, 0, 0, 0))
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        total: totalLeads,
+        today: todayLeads,
+        byPlatform: stats,
+        lastUpdated: new Date()
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching stats:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch statistics'
+    });
+  }
+});
+
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error processing request:', err);
   res.status(500).send('Internal Server Error');
+});
+
+// Add graceful shutdown handling
+process.on('SIGTERM', async () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  await mongoose.connection.close();
+  console.log('MongoDB connection closed');
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('SIGINT received, shutting down gracefully');
+  await mongoose.connection.close();
+  console.log('MongoDB connection closed');
+  process.exit(0);
 });
 
 // Start server
@@ -281,14 +409,17 @@ app.listen(PORT, async () => {
   console.log(`Facebook Webhook Server is running at http://localhost:${PORT}`);
   console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
   console.log(`API endpoint: http://localhost:${PORT}/api/leads`);
+  console.log(`Stats endpoint: http://localhost:${PORT}/api/stats`);
   console.log(`Frontend: http://localhost:${PORT}/`);
   
-  // Connect to MongoDB
+  // Connect to MongoDB using Mongoose
   await connectToMongoDB();
   
   console.log('Facebook App configured:');
   console.log(`App ID: ${APP_ID}`);
   console.log(`App Secret: ${APP_SECRET.substring(0, 8)}...`);
   console.log(`Page ID: ${PAGE_ID}`);
-  console.log('MongoDB connection configured with password: ajayKhati');
+  console.log(`Business Manager ID: ${BUSINESS_MANAGER_ID}`);
+  console.log('MongoDB connection configured with Mongoose');
+  console.log('Server optimized for better performance and reduced refreshes');
 });
