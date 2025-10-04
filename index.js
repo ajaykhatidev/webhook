@@ -5,6 +5,7 @@ const CryptoJS = require('crypto-js');
 const fs = require('fs');
 const fetch = require('node-fetch');
 const mongoose = require('mongoose');
+const cors = require('cors');
 
 const app = express();
 const PORT = 3000;
@@ -106,36 +107,21 @@ async function connectToMongoDB() {
 // Middleware
 app.use(bodyParser.json());
 
-// CORS middleware - Enhanced configuration
-app.use((req, res, next) => {
-  // Allow all origins
-  res.header('Access-Control-Allow-Origin', '*');
-  
-  // Allow all common HTTP methods
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  
-  // Allow all common headers
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
-  
-  // Allow credentials (if needed in future)
-  res.header('Access-Control-Allow-Credentials', 'true');
-  
-  // Set max age for preflight requests (24 hours)
-  res.header('Access-Control-Max-Age', '86400');
-  
-  // Add caching headers to prevent unnecessary refreshes
-  if (req.path === '/api/leads') {
-    res.header('Cache-Control', 'no-cache, no-store, must-revalidate');
-    res.header('Pragma', 'no-cache');
-    res.header('Expires', '0');
-  }
-  
-  // Handle preflight OPTIONS requests
-  if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
-  }
+// CORS configuration using cors package
+app.use(cors({
+  origin: '*', // Allow all origins
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'Cache-Control', 'Pragma'],
+  credentials: true,
+  maxAge: 86400 // 24 hours
+}));
+
+// Add caching headers for API endpoints
+app.use('/api', (req, res, next) => {
+  res.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.header('Pragma', 'no-cache');
+  res.header('Expires', '0');
+  next();
 });
 
 // Load leads from file or initialize empty array (fallback)
