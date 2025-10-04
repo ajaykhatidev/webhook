@@ -106,11 +106,22 @@ async function connectToMongoDB() {
 // Middleware
 app.use(bodyParser.json());
 
-// CORS middleware
+// CORS middleware - Enhanced configuration
 app.use((req, res, next) => {
+  // Allow all origins
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  // Allow all common HTTP methods
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  
+  // Allow all common headers
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, Cache-Control, Pragma');
+  
+  // Allow credentials (if needed in future)
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Set max age for preflight requests (24 hours)
+  res.header('Access-Control-Max-Age', '86400');
   
   // Add caching headers to prevent unnecessary refreshes
   if (req.path === '/api/leads') {
@@ -119,6 +130,7 @@ app.use((req, res, next) => {
     res.header('Expires', '0');
   }
   
+  // Handle preflight OPTIONS requests
   if (req.method === 'OPTIONS') {
     res.sendStatus(200);
   } else {
