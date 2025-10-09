@@ -151,7 +151,11 @@ app.post('/webhook', (req, res) => {
   const body = req.body;
   const signature = req.headers['x-hub-signature-256'];
   
-  console.log('Received webhook event:', JSON.stringify(body, null, 2));
+  console.log('=== WEBHOOK RECEIVED ===');
+  console.log('Timestamp:', new Date().toISOString());
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('Body:', JSON.stringify(body, null, 2));
+  console.log('Signature:', signature);
 
   // Verify signature
   if (signature && APP_SECRET) {
@@ -161,24 +165,39 @@ app.post('/webhook', (req, res) => {
     const expectedHash = CryptoJS.HmacSHA256(JSON.stringify(body), APP_SECRET).toString(CryptoJS.enc.Hex);
 
     if (method !== 'sha256' || signatureHash !== expectedHash) {
-      console.error('Invalid signature');
+      console.error('❌ Invalid signature');
+      console.error('Expected:', expectedHash);
+      console.error('Received:', signatureHash);
       return res.sendStatus(401);
+    } else {
+      console.log('✅ Signature verified successfully');
     }
+  } else {
+    console.log('⚠️ No signature verification (APP_SECRET not set)');
   }
 
   // Process lead event
   if (body.object === 'page') {
-    body.entry.forEach(entry => {
-      entry.changes.forEach(change => {
+    console.log('📄 Processing page object');
+    body.entry.forEach((entry, entryIndex) => {
+      console.log(`📝 Processing entry ${entryIndex}:`, entry.id);
+      entry.changes.forEach((change, changeIndex) => {
+        console.log(`🔄 Processing change ${changeIndex}:`, change.field);
         if (change.field === 'leadgen') {
           const leadgenId = change.value.leadgen_id;
-          console.log(`New lead received: ${leadgenId}`);
-          fetchLeadDetails(leadgenId);
+          console.log(`🎯 NEW LEAD DETECTED: ${leadgenId}`);
+          console.log('Lead details:', JSON.stringify(change.value, null, 2));
+          fetchLeadDetails(leadgenId).catch(err => {
+            console.error(`❌ Error processing lead ${leadgenId}:`, err);
+          });
         }
       });
     });
+  } else {
+    console.log('❓ Unknown object type:', body.object);
   }
 
+  console.log('=== WEBHOOK PROCESSING COMPLETE ===');
   res.status(200).send('EVENT_RECEIVED');
 });
 
