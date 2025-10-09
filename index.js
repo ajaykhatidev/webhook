@@ -15,6 +15,7 @@ const APP_ID = '819463583930088';
 const PAGE_ACCESS_TOKEN = 'EAALpTDvTlugBPm1HZAzt9ii0hBg3lmQ13AZBbQDe9xkYYl0xHggjAei8CZCVFKc3OOecPmk2NWkaUMKqfvmhdrj2gU2ZCKgwvdRJbDSZA8ZAmQnB4CvMKbgJwOooi9ssvTKPRvhMJJkmEeJjk7wdZC45dTMZBSDTS183aPqPocxCRoVWZBQMOCmXTHkjuaAhTNUyDxKq8m4f2';
 const PAGE_ID = '849032321617972';
 const BUSINESS_MANAGER_ID = "3742628306040446";
+const LEADGEN_FORM_ID = "2930627593993454"; // Hardcoded leadgen form ID
 
 // MongoDB configuration
 const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/webhook_leads';
@@ -200,6 +201,74 @@ app.post('/webhook', (req, res) => {
   console.log('=== WEBHOOK PROCESSING COMPLETE ===');
   res.status(200).send('EVENT_RECEIVED');
 });
+
+// Automatically fetch all leads from the hardcoded leadgen form
+async function fetchAllLeadsFromForm() {
+  console.log(`🔄 Auto-fetching all leads from form: ${LEADGEN_FORM_ID}`);
+  
+  if (!PAGE_ACCESS_TOKEN || PAGE_ACCESS_TOKEN === 'your_page_access_token_here') {
+    console.error('❌ PAGE_ACCESS_TOKEN not set, cannot fetch leads');
+    return;
+  }
+
+  try {
+    console.log(`📡 Making Graph API call to: https://graph.facebook.com/v23.0/${LEADGEN_FORM_ID}/leads`);
+    const response = await fetch(`https://graph.facebook.com/v23.0/${LEADGEN_FORM_ID}/leads?access_token=${PAGE_ACCESS_TOKEN}`);
+    const data = await response.json();
+    
+    console.log('📊 Graph API Response:', JSON.stringify(data, null, 2));
+    
+    if (data.error) {
+      console.error('❌ Graph API Error:', data.error);
+      throw new Error(`Graph API error: ${data.error.message}`);
+    }
+
+    if (!data.data || !Array.isArray(data.data)) {
+      console.log('⚠️ No leads data received');
+      return;
+    }
+
+    console.log(`📋 Found ${data.data.length} leads in form`);
+    
+    let newLeadsCount = 0;
+    let existingLeadsCount = 0;
+
+    // Process each lead
+    for (const leadData of data.data) {
+      // Check if lead already exists
+      const existingLead = await Lead.findOne({ lead_id: leadData.id });
+      if (existingLead) {
+        existingLeadsCount++;
+        console.log(`⚠️ Lead ${leadData.id} already exists, skipping`);
+        continue;
+      }
+
+      // Create new lead using Mongoose
+      const newLead = new Lead({
+        lead_id: leadData.id,
+        ad_id: leadData.ad_id,
+        form_id: leadData.form_id,
+        created_time: new Date(leadData.created_time),
+        field_data: leadData.field_data,
+        platform: 'facebook',
+        source: 'leadgen_form',
+        business_manager_id: BUSINESS_MANAGER_ID,
+        page_id: PAGE_ID,
+        raw_data: leadData
+      });
+
+      const savedLead = await newLead.save();
+      newLeadsCount++;
+      console.log(`✅ New lead saved: ${leadData.id} - ${leadData.field_data.find(f => f.name === 'full_name')?.values[0] || 'Unknown'}`);
+    }
+
+    console.log(`🎉 Auto-fetch complete: ${newLeadsCount} new leads, ${existingLeadsCount} existing leads`);
+
+  } catch (error) {
+    console.error('❌ Error auto-fetching leads:', error.message);
+    console.error('Full error:', error);
+  }
+}
 
 // Fetch full lead details from Graph API and save to MongoDB using Mongoose
 async function fetchLeadDetails(leadgenId) {
@@ -416,6 +485,32 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
+// Auto-fetch leads every 5 minutes (300000 ms)
+setInterval(() => {
+  console.log('⏰ Auto-fetch timer triggered');
+  fetchAllLeadsFromForm();
+}, 5 * 60 * 1000);
+
+// API endpoint to manually trigger lead fetching
+app.get('/api/fetch-leads', async (req, res) => {
+  try {
+    console.log('🔄 Manual lead fetch triggered via API');
+    await fetchAllLeadsFromForm();
+    res.json({
+      success: true,
+      message: 'Lead fetch completed successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error in manual lead fetch:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch leads',
+      message: error.message
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, async () => {
   console.log(`Facebook Webhook Server is running at http://localhost:${PORT}`);
@@ -427,11 +522,20 @@ app.listen(PORT, async () => {
   // Connect to MongoDB using Mongoose
   await connectToMongoDB();
   
-  console.log('Facebook App configured:');
+  console.log('\n🔧 Facebook App configured:');
   console.log(`App ID: ${APP_ID}`);
   console.log(`App Secret: ${APP_SECRET.substring(0, 8)}...`);
   console.log(`Page ID: ${PAGE_ID}`);
+  console.log(`Leadgen Form ID: ${LEADGEN_FORM_ID}`);
   console.log(`Business Manager ID: ${BUSINESS_MANAGER_ID}`);
+  console.log(`Page Access Token: ${PAGE_ACCESS_TOKEN.substring(0, 20)}...`);
   console.log('MongoDB connection configured with Mongoose');
-  console.log('Server optimized for better performance and reduced refreshes');
+  console.log('\n⏰ Auto-fetch configured: Every 5 minutes');
+  console.log('🔄 Manual fetch endpoint: /api/fetch-leads');
+  
+  // Initial fetch after 5 seconds
+  setTimeout(() => {
+    console.log('\n🚀 Performing initial lead fetch...');
+    fetchAllLeadsFromForm();
+  }, 5000);
 }); 
