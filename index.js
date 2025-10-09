@@ -203,17 +203,23 @@ app.post('/webhook', (req, res) => {
 
 // Fetch full lead details from Graph API and save to MongoDB using Mongoose
 async function fetchLeadDetails(leadgenId) {
+  console.log(`🔍 Fetching lead details for ID: ${leadgenId}`);
+  
   if (!PAGE_ACCESS_TOKEN || PAGE_ACCESS_TOKEN === 'your_page_access_token_here') {
-    console.error('PAGE_ACCESS_TOKEN not set, cannot fetch lead details');
+    console.error('❌ PAGE_ACCESS_TOKEN not set, cannot fetch lead details');
     return;
   }
 
   try {
+    console.log(`📡 Making Graph API call to: https://graph.facebook.com/v23.0/${leadgenId}`);
     const response = await fetch(`https://graph.facebook.com/v23.0/${leadgenId}?access_token=${PAGE_ACCESS_TOKEN}`);
     const leadData = await response.json();
     
+    console.log('📊 Graph API Response:', JSON.stringify(leadData, null, 2));
+    
     if (leadData.error) {
-      throw new Error(leadData.error.message);
+      console.error('❌ Graph API Error:', leadData.error);
+      throw new Error(`Graph API error: ${leadData.error.message}`);
     }
 
     // Check if lead already exists
@@ -241,7 +247,8 @@ async function fetchLeadDetails(leadgenId) {
     console.log('✅ Lead saved to MongoDB with Mongoose:', savedLead._id);
 
   } catch (error) {
-    console.error('Error fetching/saving lead:', error);
+    console.error('❌ Error fetching/saving lead:', error.message);
+    console.error('Full error:', error);
   }
 }
 
