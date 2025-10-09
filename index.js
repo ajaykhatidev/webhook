@@ -294,37 +294,53 @@ app.get('/api/leads', async (req, res) => {
 // API endpoint to add a lead manually (for testing) using Mongoose
 app.post('/api/leads', async (req, res) => {
   try {
-    const { name, email, phone, source, message } = req.body;
-    
-    const newLead = new Lead({
-      lead_id: Date.now().toString(),
-      ad_id: null,
-      form_id: null,
-      created_time: new Date(),
-      field_data: [
-        { name: 'full_name', values: [name || 'Unknown'] },
-        { name: 'email', values: [email || ''] },
-        { name: 'phone_number', values: [phone || ''] }
-      ],
-      platform: 'manual',
-      source: source || 'Manual Entry',
-      business_manager_id: BUSINESS_MANAGER_ID,
-      page_id: PAGE_ID,
-      raw_data: {
-        name: name || 'Unknown',
-        email: email || '',
-        phone: phone || '',
-        message: message || ''
-      }
-    });
+    // Check if this is a Facebook lead (has lead_id, form_id, etc.)
+    if (req.body.lead_id && req.body.form_id) {
+      // This is a Facebook lead - save it as-is
+      const newLead = new Lead(req.body);
+      const savedLead = await newLead.save();
+      console.log('✅ Facebook lead saved to MongoDB:', savedLead._id);
+      
+      res.json({
+        success: true,
+        message: 'Facebook lead saved successfully',
+        data: savedLead
+      });
+    } else {
+      // This is a manual lead entry
+      const { name, email, phone, source, message } = req.body;
+      
+      const newLead = new Lead({
+        lead_id: Date.now().toString(),
+        ad_id: null,
+        form_id: null,
+        created_time: new Date(),
+        field_data: [
+          { name: 'full_name', values: [name || 'Unknown'] },
+          { name: 'email', values: [email || ''] },
+          { name: 'phone_number', values: [phone || ''] }
+        ],
+        platform: 'manual',
+        source: source || 'Manual Entry',
+        business_manager_id: BUSINESS_MANAGER_ID,
+        page_id: PAGE_ID,
+        raw_data: {
+          name: name || 'Unknown',
+          email: email || '',
+          phone: phone || '',
+          message: message || ''
+        }
+      });
 
-    const savedLead = await newLead.save();
-    console.log('✅ Manual lead saved to MongoDB with Mongoose:', savedLead._id);
-    
-    res.json({
-      success: true,
-      data: savedLead
-    });
+      const savedLead = await newLead.save();
+      console.log('✅ Manual lead saved to MongoDB with Mongoose:', savedLead._id);
+      
+      res.json({
+        success: true,
+        message: 'Manual lead saved successfully',
+        data: savedLead
+      });
+    }
   } catch (error) {
     console.error('Error adding lead:', error);
     res.status(500).json({
