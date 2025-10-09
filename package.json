@@ -1,21 +1,19 @@
 {
   "name": "webhook-testing",
   "version": "1.0.0",
-  "description": "",
-  "main": "server.js",
+  "description": "Facebook Lead Webhook Server with MongoDB",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node test-webhook.js",
     "dev": "node index.js"
   },
-  "keywords": [],
+  "keywords": ["facebook", "webhook", "leads", "mongodb"],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
     "crypto-js": "^4.2.0",
-    "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "mongoose": "^8.19.0",
     "node-fetch": "^2.7.0"
