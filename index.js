@@ -8,13 +8,16 @@ const cors = require('cors');
 const app = express();
 const PORT = 3000;
 const VERIFY_TOKEN = 'test_webhook_token_123';
-const APP_SECRET = 'c970c6f5601d12734e6cb11932d391a5';
+ 
+const APP_SECRET = 'c970c6f5601d12734e6cb11932d391a5'; 
+
 const APP_ID = '1147659733499355';
 const PAGE_ACCESS_TOKEN = 'EAAQTylq8ZCdsBPnQEJFVGsNpTuK1uRaEDxVq4VEidZAPtWkGSbCXS9Rbt2qtYB3oUKbkyFZCEVf1bAZBM0HaegX3mZC0tw45rKDpBgT5DEsZA62ggm4zeZBMMsDWq16XRE1BoUaCCF1ff8JViRIwKH8U95WR0APXTZBGwJqOGNefzzsGLRZBHxx1WBrcYoD5jpBGZA0KrylyizGlyZAZC5ZB6IaQQjZCSvipBAZC5r7s9mVnVxjzu0ZD';
 const PAGE_ID = '849032321617972';
-const BUSINESS_MANAGER_ID = '3742628306040446';
+const BUSINESS_MANAGER_ID = "3742628306040446";
+
+// MongoDB configuration
 const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/webhook_leads';
-const GRAPH_API_VERSION = 'v23.0';
 
 // Mongoose Schema for Lead
 const leadSchema = new mongoose.Schema({
@@ -60,6 +63,14 @@ const leadSchema = new mongoose.Schema({
   raw_data: {
     type: mongoose.Schema.Types.Mixed,
     default: {}
+  },
+  created_at: {
+    type: Date,
+    default: Date.now
+  },
+  updated_at: {
+    type: Date,
+    default: Date.now
   }
 }, {
   timestamps: true
@@ -79,43 +90,29 @@ async function connectToMongoDB() {
     await mongoose.connect(MONGODB_URI, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 5000,
-      maxPoolSize: 10,
-      retryWrites: true,
-      retryReads: true
     });
     console.log('✅ Connected to MongoDB with Mongoose');
-
+    
     // Test the connection
     const leadCount = await Lead.countDocuments();
     console.log(`📊 Current leads in database: ${leadCount}`);
-
-    // Handle connection events
-    mongoose.connection.on('disconnected', () => {
-      console.warn('MongoDB disconnected, attempting to reconnect...');
-      connectToMongoDB();
-    });
-
-    mongoose.connection.on('error', (error) => {
-      console.error('MongoDB connection error:', error);
-    });
-
+    
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error);
-    setTimeout(connectToMongoDB, 5000); // Retry after 5 seconds
+    mongoose.connection.close();
   }
 }
 
 // Middleware
 app.use(bodyParser.json());
 
-// CORS configuration
+// CORS configuration using cors package
 app.use(cors({
-  origin: '*',
+  origin: '*', // Allow all origins
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization', 'Cache-Control', 'Pragma'],
   credentials: true,
-  maxAge: 86400
+  maxAge: 86400 // 24 hours
 }));
 
 // Add caching headers for API endpoints
@@ -125,6 +122,7 @@ app.use('/api', (req, res, next) => {
   res.header('Expires', '0');
   next();
 });
+
 
 // Basic route
 app.get('/', (req, res) => {
@@ -149,62 +147,54 @@ app.get('/webhook', (req, res) => {
 });
 
 // Receive lead notifications (POST /webhook)
-app.post('/webhook', async (req, res) => {
+app.post('/webhook', (req, res) => {
   const body = req.body;
   const signature = req.headers['x-hub-signature-256'];
-
+  
   console.log('Received webhook event:', JSON.stringify(body, null, 2));
 
   // Verify signature
-  if (!signature) {
-    console.error('No signature provided in webhook request');
-    return res.status(401).send('Missing signature');
+  if (signature && APP_SECRET) {
+    const elements = signature.split('=');
+    const method = elements[0];
+    const signatureHash = elements[1];
+    const expectedHash = CryptoJS.HmacSHA256(JSON.stringify(body), APP_SECRET).toString(CryptoJS.enc.Hex);
+
+    if (method !== 'sha256' || signatureHash !== expectedHash) {
+      console.error('Invalid signature');
+      return res.sendStatus(401);
+    }
   }
 
-  const [method, signatureHash] = signature.split('=');
-  if (method !== 'sha256') {
-    console.error('Invalid signature method:', method);
-    return res.status(401).send('Invalid signature method');
-  }
-
-  const expectedHash = CryptoJS.HmacSHA256(JSON.stringify(body), APP_SECRET).toString(CryptoJS.enc.Hex);
-  if (signatureHash !== expectedHash) {
-    console.error('Invalid signature hash');
-    return res.status(401).send('Invalid signature');
-  }
-
-  // Process leads asynchronously
+  // Process lead event
   if (body.object === 'page') {
     body.entry.forEach(entry => {
       entry.changes.forEach(change => {
         if (change.field === 'leadgen') {
           const leadgenId = change.value.leadgen_id;
           console.log(`New lead received: ${leadgenId}`);
-          fetchLeadDetails(leadgenId).catch(err => {
-            console.error(`Error processing lead ${leadgenId}:`, err);
-          });
+          fetchLeadDetails(leadgenId);
         }
       });
     });
   }
 
-  // Respond immediately to avoid webhook timeout
   res.status(200).send('EVENT_RECEIVED');
 });
 
-// Fetch full lead details from Graph API and save to MongoDB
+// Fetch full lead details from Graph API and save to MongoDB using Mongoose
 async function fetchLeadDetails(leadgenId) {
-  if (!PAGE_ACCESS_TOKEN) {
+  if (!PAGE_ACCESS_TOKEN || PAGE_ACCESS_TOKEN === 'your_page_access_token_here') {
     console.error('PAGE_ACCESS_TOKEN not set, cannot fetch lead details');
     return;
   }
 
   try {
-    const response = await fetch(`https://graph.facebook.com/${GRAPH_API_VERSION}/${leadgenId}?access_token=${PAGE_ACCESS_TOKEN}`);
+    const response = await fetch(`https://graph.facebook.com/v23.0/${leadgenId}?access_token=${PAGE_ACCESS_TOKEN}`);
     const leadData = await response.json();
-
+    
     if (leadData.error) {
-      throw new Error(`Graph API error: ${leadData.error.message}`);
+      throw new Error(leadData.error.message);
     }
 
     // Check if lead already exists
@@ -214,7 +204,7 @@ async function fetchLeadDetails(leadgenId) {
       return;
     }
 
-    // Create new lead
+    // Create new lead using Mongoose
     const newLead = new Lead({
       lead_id: leadData.id,
       ad_id: leadData.ad_id,
@@ -232,15 +222,12 @@ async function fetchLeadDetails(leadgenId) {
     console.log('✅ Lead saved to MongoDB with Mongoose:', savedLead._id);
 
   } catch (error) {
-    if (error.code === 11000) {
-      console.log(`Duplicate lead detected for leadgen_id ${leadgenId}`);
-    } else {
-      console.error('Error fetching/saving lead:', error.message);
-    }
+    console.error('Error fetching/saving lead:', error);
   }
 }
 
-// API endpoint to get all leads
+
+// API endpoint to get all leads (from MongoDB using Mongoose)
 app.get('/api/leads', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -250,14 +237,17 @@ app.get('/api/leads', async (req, res) => {
       });
     }
 
+    // Use Mongoose to fetch leads with optimized query
     const leadsData = await Lead.find({})
       .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
       .sort({ created_at: -1 })
-      .lean();
-
+      .lean(); // Use lean() for better performance
+    
     console.log(`📊 Fetched ${leadsData.length} leads from MongoDB`);
 
+    // Add timestamp for frontend caching
     const timestamp = new Date().toISOString();
+    
     res.json({
       success: true,
       data: leadsData,
@@ -267,19 +257,19 @@ app.get('/api/leads', async (req, res) => {
       lastModified: leadsData.length > 0 ? leadsData[0].created_at : timestamp
     });
   } catch (error) {
-    console.error('Error fetching leads:', error.message);
+    console.error('Error fetching leads:', error);
     res.status(500).json({
       success: false,
-      error: `Failed to fetch leads: ${error.message}`
+      error: 'Failed to fetch leads'
     });
   }
 });
 
-// API endpoint to add a lead manually (for testing)
+// API endpoint to add a lead manually (for testing) using Mongoose
 app.post('/api/leads', async (req, res) => {
   try {
     const { name, email, phone, source, message } = req.body;
-
+    
     const newLead = new Lead({
       lead_id: Date.now().toString(),
       ad_id: null,
@@ -304,16 +294,16 @@ app.post('/api/leads', async (req, res) => {
 
     const savedLead = await newLead.save();
     console.log('✅ Manual lead saved to MongoDB with Mongoose:', savedLead._id);
-
+    
     res.json({
       success: true,
       data: savedLead
     });
   } catch (error) {
-    console.error('Error adding lead:', error.message);
+    console.error('Error adding lead:', error);
     res.status(500).json({
       success: false,
-      error: `Failed to add lead: ${error.message}`
+      error: 'Failed to add lead'
     });
   }
 });
@@ -355,24 +345,21 @@ app.get('/api/stats', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching stats:', error.message);
+    console.error('Error fetching stats:', error);
     res.status(500).json({
       success: false,
-      error: `Failed to fetch statistics: ${error.message}`
+      error: 'Failed to fetch statistics'
     });
   }
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error processing request:', err.message);
-  res.status(500).json({
-    success: false,
-    error: `Internal Server Error: ${err.message}`
-  });
+  console.error('Error processing request:', err);
+  res.status(500).send('Internal Server Error');
 });
 
-// Graceful shutdown handling
+// Add graceful shutdown handling
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully');
   await mongoose.connection.close();
@@ -395,13 +382,14 @@ app.listen(PORT, async () => {
   console.log(`Stats endpoint: http://localhost:${PORT}/api/stats`);
   console.log(`Frontend: http://localhost:${PORT}/`);
   
+  // Connect to MongoDB using Mongoose
+  await connectToMongoDB();
+  
   console.log('Facebook App configured:');
   console.log(`App ID: ${APP_ID}`);
   console.log(`App Secret: ${APP_SECRET.substring(0, 8)}...`);
   console.log(`Page ID: ${PAGE_ID}`);
   console.log(`Business Manager ID: ${BUSINESS_MANAGER_ID}`);
   console.log('MongoDB connection configured with Mongoose');
-  
-  // Connect to MongoDB
-  await connectToMongoDB();
-});
+  console.log('Server optimized for better performance and reduced refreshes');
+}); 
