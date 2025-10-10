@@ -17,9 +17,6 @@ const PAGE_ID = '849032321617972';
 const BUSINESS_MANAGER_ID = "3742628306040446";
 const LEADGEN_FORM_ID = "2930627593993454"; // Hardcoded leadgen form ID
 
-// Facebook Pixel configuration
-const PIXEL_ID = '819463583930088'; // Your actual Pixel ID from Events Manager
-const PIXEL_ACCESS_TOKEN = 'YOUR_PIXEL_ACCESS_TOKEN'; // Get from Facebook Developer Console
 
 // MongoDB configuration
 const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/webhook_leads';
@@ -89,47 +86,6 @@ leadSchema.index({ lead_id: 1 });
 // Create Lead model
 const Lead = mongoose.model('Lead', leadSchema);
 
-// Facebook Pixel tracking function
-const trackPixelEvent = async (eventName, eventData) => {
-  try {
-    if (!PIXEL_ID || PIXEL_ID === 'YOUR_PIXEL_ID' || !PIXEL_ACCESS_TOKEN || PIXEL_ACCESS_TOKEN === 'YOUR_PIXEL_ACCESS_TOKEN') {
-      console.log('⚠️ Pixel tracking skipped - Pixel ID or Access Token not configured');
-      return;
-    }
-
-    console.log(`🎯 Tracking Pixel Event: ${eventName}`, eventData);
-    
-    const response = await fetch(`https://graph.facebook.com/v23.0/${PIXEL_ID}/events`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${PIXEL_ACCESS_TOKEN}`
-      },
-      body: JSON.stringify({
-        data: [{
-          event_name: eventName,
-          event_time: Math.floor(Date.now() / 1000),
-          user_data: {
-            // Hash user data for privacy (optional)
-            em: eventData.email ? require('crypto').createHash('sha256').update(eventData.email.toLowerCase()).digest('hex') : undefined,
-            ph: eventData.phone ? require('crypto').createHash('sha256').update(eventData.phone.replace(/\D/g, '')).digest('hex') : undefined
-          },
-          custom_data: {
-            ...eventData,
-            source: 'webhook_server',
-            timestamp: new Date().toISOString()
-          }
-        }],
-        access_token: PIXEL_ACCESS_TOKEN
-      })
-    });
-    
-    const result = await response.json();
-    console.log(`✅ Pixel event tracked: ${eventName}`, result);
-  } catch (error) {
-    console.error('❌ Pixel tracking error:', error.message);
-  }
-};
 
 // Connect to MongoDB using Mongoose
 async function connectToMongoDB() {
@@ -235,16 +191,6 @@ app.post('/webhook', (req, res) => {
           console.log(`🎯 NEW LEAD DETECTED: ${leadgenId}`);
           console.log('Lead details:', JSON.stringify(change.value, null, 2));
           
-          // Track Pixel event for new lead
-          trackPixelEvent('Lead', {
-            content_name: 'Facebook Lead Ad',
-            content_category: 'Real Estate',
-            value: 0.00,
-            currency: 'USD',
-            lead_id: leadgenId,
-            form_id: change.value.form_id,
-            ad_id: change.value.ad_id
-          });
           
           fetchLeadDetails(leadgenId).catch(err => {
             console.error(`❌ Error processing lead ${leadgenId}:`, err);
@@ -322,17 +268,6 @@ async function fetchAllLeadsFromForm() {
 
     console.log(`🎉 Auto-fetch complete: ${newLeadsCount} new leads, ${existingLeadsCount} existing leads`);
 
-    // Track Pixel event for auto-fetch
-    if (newLeadsCount > 0) {
-      await trackPixelEvent('CompleteRegistration', {
-        content_name: 'Lead Auto-Fetch',
-        content_category: 'CRM',
-        value: newLeadsCount * 10,
-        currency: 'USD',
-        lead_count: newLeadsCount,
-        source: 'auto_fetch'
-      });
-    }
 
   } catch (error) {
     console.error('❌ Error auto-fetching leads:', error.message);
@@ -566,15 +501,6 @@ app.get('/api/fetch-leads', async (req, res) => {
   try {
     console.log('🔄 Manual lead fetch triggered via API');
     
-    // Track Pixel event for manual fetch
-    await trackPixelEvent('CustomEvent', {
-      event_name: 'ManualLeadFetch',
-      content_name: 'Manual Lead Fetch Triggered',
-      content_category: 'CRM',
-      value: 0.00,
-      currency: 'USD',
-      source: 'api_endpoint'
-    });
     
     await fetchAllLeadsFromForm();
     res.json({
@@ -611,12 +537,8 @@ app.listen(PORT, async () => {
   console.log(`Business Manager ID: ${BUSINESS_MANAGER_ID}`);
   console.log(`Page Access Token: ${PAGE_ACCESS_TOKEN.substring(0, 20)}...`);
   console.log('MongoDB connection configured with Mongoose');
-  console.log('\n🎯 Facebook Pixel configured:');
-  console.log(`Pixel ID: ${PIXEL_ID === 'YOUR_PIXEL_ID' ? 'Not configured' : PIXEL_ID}`);
-  console.log(`Pixel Access Token: ${PIXEL_ACCESS_TOKEN === 'YOUR_PIXEL_ACCESS_TOKEN' ? 'Not configured' : PIXEL_ACCESS_TOKEN.substring(0, 20) + '...'}`);
   console.log('\n⏰ Auto-fetch configured: Every 5 minutes');
   console.log('🔄 Manual fetch endpoint: /api/fetch-leads');
-  console.log('🎯 Pixel tracking: Enabled for all lead events');
   
   // Initial fetch after 5 seconds
   setTimeout(() => {
