@@ -539,6 +539,7 @@ app.listen(PORT, async () => {
   console.log('MongoDB connection configured with Mongoose');
   console.log('\n⏰ Auto-fetch configured: Every 5 minutes');
   console.log('🔄 Manual fetch endpoint: /api/fetch-leads');
+  console.log('🚀 Latest deployment: Auto-fetch enabled');
   
   // Initial fetch after 5 seconds
   setTimeout(() => {
