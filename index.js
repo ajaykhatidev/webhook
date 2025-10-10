@@ -266,6 +266,13 @@ async function fetchAllLeadsFromForm() {
       console.log(`✅ New lead saved: ${leadData.id} - ${leadData.field_data.find(f => f.name === 'full_name')?.values[0] || 'Unknown'}`);
     }
 
+    // Invalidate cache if new leads were added
+    if (newLeadsCount > 0) {
+      leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
+      statsCache = { data: null, timestamp: null };
+      console.log('🔄 Cache invalidated due to new leads');
+    }
+
     console.log(`🎉 Auto-fetch complete: ${newLeadsCount} new leads, ${existingLeadsCount} existing leads`);
 
 
@@ -319,6 +326,11 @@ async function fetchLeadDetails(leadgenId) {
 
     const savedLead = await newLead.save();
     console.log('✅ Lead saved to MongoDB with Mongoose:', savedLead._id);
+    
+    // Invalidate cache when new lead is added
+    leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
+    statsCache = { data: null, timestamp: null };
+    console.log('🔄 Cache invalidated due to new lead');
 
   } catch (error) {
     console.error('❌ Error fetching/saving lead:', error.message);
@@ -327,7 +339,18 @@ async function fetchLeadDetails(leadgenId) {
 }
 
 
-// API endpoint to get all leads (from MongoDB using Mongoose)
+// In-memory cache for leads data
+let leadsCache = {
+  data: null,
+  timestamp: null,
+  count: 0,
+  lastModified: null
+};
+
+// Cache duration: 30 seconds
+const CACHE_DURATION = 30 * 1000;
+
+// API endpoint to get all leads (from MongoDB using Mongoose) with caching and pagination
 app.get('/api/leads', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -337,13 +360,56 @@ app.get('/api/leads', async (req, res) => {
       });
     }
 
-    // Use Mongoose to fetch leads with optimized query
-    const leadsData = await Lead.find({})
-      .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
-      .sort({ created_at: -1 })
-      .lean(); // Use lean() for better performance
+    // Parse query parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50; // Default 50 leads per page
+    const platform = req.query.platform; // Filter by platform
+    const skip = (page - 1) * limit;
+
+    // Check if we have valid cached data
+    const now = Date.now();
+    const isCacheValid = leadsCache.timestamp && (now - leadsCache.timestamp) < CACHE_DURATION;
+
+    let leadsData, totalCount;
+
+    if (isCacheValid && !platform && page === 1 && limit === 50) {
+      // Use cached data for default pagination
+      console.log('📦 Using cached leads data');
+      leadsData = leadsCache.data.slice(0, limit);
+      totalCount = leadsCache.count;
+    } else {
+      // Build query filter
+      const filter = platform ? { platform } : {};
+      
+      // Fetch leads with pagination
+      const query = Lead.find(filter)
+        .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
+        .sort({ created_at: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(); // Use lean() for better performance
+
+      leadsData = await query;
+      totalCount = await Lead.countDocuments(filter);
+
+      // Update cache only for default query (no filters, first page)
+      if (!platform && page === 1 && limit === 50) {
+        leadsCache = {
+          data: leadsData,
+          timestamp: now,
+          count: totalCount,
+          lastModified: leadsData.length > 0 ? leadsData[0].created_at : new Date()
+        };
+        console.log('💾 Updated leads cache');
+      }
+    }
     
-    console.log(`📊 Fetched ${leadsData.length} leads from MongoDB`);
+    console.log(`📊 Fetched ${leadsData.length} leads from MongoDB (page ${page}, limit ${limit})`);
+
+    // Calculate pagination info
+    const totalPages = Math.ceil(totalCount / limit);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
 
     // Add timestamp for frontend caching
     const timestamp = new Date().toISOString();
@@ -351,10 +417,18 @@ app.get('/api/leads', async (req, res) => {
     res.json({
       success: true,
       data: leadsData,
-      count: leadsData.length,
+      pagination: {
+        currentPage: page,
+        totalPages: totalPages,
+        totalCount: totalCount,
+        limit: limit,
+        hasNextPage: hasNextPage,
+        hasPrevPage: hasPrevPage
+      },
       source: 'mongodb',
       timestamp: timestamp,
-      lastModified: leadsData.length > 0 ? leadsData[0].created_at : timestamp
+      lastModified: leadsData.length > 0 ? leadsData[0].created_at : timestamp,
+      cached: isCacheValid && !platform && page === 1 && limit === 50
     });
   } catch (error) {
     console.error('Error fetching leads:', error);
@@ -409,6 +483,11 @@ app.post('/api/leads', async (req, res) => {
       const savedLead = await newLead.save();
       console.log('✅ Manual lead saved to MongoDB with Mongoose:', savedLead._id);
       
+      // Invalidate cache when manual lead is added
+      leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
+      statsCache = { data: null, timestamp: null };
+      console.log('🔄 Cache invalidated due to manual lead');
+      
       res.json({
         success: true,
         message: 'Manual lead saved successfully',
@@ -424,7 +503,13 @@ app.post('/api/leads', async (req, res) => {
   }
 });
 
-// API endpoint to get lead statistics
+// Cache for statistics
+let statsCache = {
+  data: null,
+  timestamp: null
+};
+
+// API endpoint to get lead statistics with caching
 app.get('/api/stats', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -434,6 +519,21 @@ app.get('/api/stats', async (req, res) => {
       });
     }
 
+    // Check if we have valid cached stats
+    const now = Date.now();
+    const isCacheValid = statsCache.timestamp && (now - statsCache.timestamp) < CACHE_DURATION;
+
+    if (isCacheValid) {
+      console.log('📦 Using cached stats data');
+      return res.json({
+        success: true,
+        data: statsCache.data,
+        cached: true,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Fetch fresh stats data
     const stats = await Lead.aggregate([
       {
         $group: {
@@ -451,14 +551,24 @@ app.get('/api/stats', async (req, res) => {
       }
     });
 
+    const statsData = {
+      total: totalLeads,
+      today: todayLeads,
+      byPlatform: stats,
+      lastUpdated: new Date()
+    };
+
+    // Update cache
+    statsCache = {
+      data: statsData,
+      timestamp: now
+    };
+
     res.json({
       success: true,
-      data: {
-        total: totalLeads,
-        today: todayLeads,
-        byPlatform: stats,
-        lastUpdated: new Date()
-      }
+      data: statsData,
+      cached: false,
+      timestamp: new Date().toISOString()
     });
   } catch (error) {
     console.error('Error fetching stats:', error);
@@ -490,11 +600,11 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-// Auto-fetch leads every 5 minutes (300000 ms)
+// Auto-fetch leads every 10 minutes (600000 ms) - reduced frequency for better performance
 setInterval(() => {
   console.log('⏰ Auto-fetch timer triggered');
   fetchAllLeadsFromForm();
-}, 5 * 60 * 1000);
+}, 10 * 60 * 1000);
 
 // API endpoint to manually trigger lead fetching
 app.get('/api/fetch-leads', async (req, res) => {
@@ -518,13 +628,121 @@ app.get('/api/fetch-leads', async (req, res) => {
   }
 });
 
+// API endpoint to warm up cache
+app.get('/api/cache/warm', async (req, res) => {
+  try {
+    console.log('🔥 Warming up cache...');
+    
+    // Warm up leads cache
+    const leadsData = await Lead.find({})
+      .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
+      .sort({ created_at: -1 })
+      .limit(50)
+      .lean();
+    
+    const totalCount = await Lead.countDocuments();
+    
+    leadsCache = {
+      data: leadsData,
+      timestamp: Date.now(),
+      count: totalCount,
+      lastModified: leadsData.length > 0 ? leadsData[0].created_at : new Date()
+    };
+    
+    // Warm up stats cache
+    const stats = await Lead.aggregate([
+      {
+        $group: {
+          _id: '$platform',
+          count: { $sum: 1 },
+          latest: { $max: '$created_at' }
+        }
+      }
+    ]);
+
+    const totalLeads = await Lead.countDocuments();
+    const todayLeads = await Lead.countDocuments({
+      created_at: {
+        $gte: new Date(new Date().setHours(0, 0, 0, 0))
+      }
+    });
+
+    statsCache = {
+      data: {
+        total: totalLeads,
+        today: todayLeads,
+        byPlatform: stats,
+        lastUpdated: new Date()
+      },
+      timestamp: Date.now()
+    };
+    
+    console.log('✅ Cache warmed up successfully');
+    
+    res.json({
+      success: true,
+      message: 'Cache warmed up successfully',
+      leadsCached: leadsData.length,
+      totalLeads: totalCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error warming up cache:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to warm up cache',
+      message: error.message
+    });
+  }
+});
+
+// API endpoint to remove manual leads
+app.delete('/api/leads/manual', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not connected'
+      });
+    }
+
+    console.log('🗑️ Removing all manual leads from database...');
+    
+    const result = await Lead.deleteMany({ platform: 'manual' });
+    
+    console.log(`✅ Removed ${result.deletedCount} manual leads`);
+    
+    // Invalidate cache after removing leads
+    leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
+    statsCache = { data: null, timestamp: null };
+    console.log('🔄 Cache invalidated due to lead removal');
+    
+    res.json({
+      success: true,
+      message: `Successfully removed ${result.deletedCount} manual leads`,
+      deletedCount: result.deletedCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error removing manual leads:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to remove manual leads',
+      message: error.message
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, async () => {
   console.log(`Facebook Webhook Server is running at http://localhost:${PORT}`);
   console.log(`Webhook endpoint: http://localhost:${PORT}/webhook`);
-  console.log(`API endpoint: http://localhost:${PORT}/api/leads`);
-  console.log(`Stats endpoint: http://localhost:${PORT}/api/stats`);
-  console.log(`Frontend: http://localhost:${PORT}/`);
+  console.log(`API endpoints:`);
+  console.log(`  - Leads: http://localhost:${PORT}/api/leads (with pagination & caching)`);
+  console.log(`  - Stats: http://localhost:${PORT}/api/stats (cached)`);
+  console.log(`  - Fetch leads: http://localhost:${PORT}/api/fetch-leads`);
+  console.log(`  - Remove manual leads: DELETE http://localhost:${PORT}/api/leads/manual`);
+  console.log(`  - Warm cache: http://localhost:${PORT}/api/cache/warm`);
   
   // Connect to MongoDB using Mongoose
   await connectToMongoDB();
@@ -537,7 +755,7 @@ app.listen(PORT, async () => {
   console.log(`Business Manager ID: ${BUSINESS_MANAGER_ID}`);
   console.log(`Page Access Token: ${PAGE_ACCESS_TOKEN.substring(0, 20)}...`);
   console.log('MongoDB connection configured with Mongoose');
-  console.log('\n⏰ Auto-fetch configured: Every 5 minutes');
+  console.log('\n⏰ Auto-fetch configured: Every 10 minutes (optimized for performance)');
   console.log('🔄 Manual fetch endpoint: /api/fetch-leads');
   console.log('🚀 Latest deployment: Auto-fetch enabled');
   
