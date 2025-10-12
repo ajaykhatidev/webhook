@@ -1112,6 +1112,75 @@ app.get('/api/discover-forms', async (req, res) => {
   }
 });
 
+// API to fix form_id issues - update all leads to use discovered form_id
+app.post('/api/fix-form-ids', async (req, res) => {
+  try {
+    console.log('🔧 Fixing form_id issues...');
+    
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not connected'
+      });
+    }
+
+    // First, discover all forms to get the active form IDs
+    await discoverAllForms();
+    const activeFormIds = getActiveFormIds();
+    
+    if (activeFormIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No forms discovered. Please discover forms first.'
+      });
+    }
+
+    // Use the first discovered form ID as the main form ID
+    const mainFormId = activeFormIds[0];
+    console.log(`📋 Using main form ID: ${mainFormId}`);
+
+    // Update all leads with null form_id to use the main form ID
+    const updateResult = await Lead.updateMany(
+      { form_id: null },
+      { $set: { form_id: mainFormId } }
+    );
+
+    console.log(`✅ Updated ${updateResult.modifiedCount} leads with null form_id`);
+
+    // Also update any leads that might have inconsistent form_ids
+    const inconsistentUpdate = await Lead.updateMany(
+      { form_id: { $ne: mainFormId, $ne: null } },
+      { $set: { form_id: mainFormId } }
+    );
+
+    console.log(`✅ Updated ${inconsistentUpdate.modifiedCount} leads with inconsistent form_id`);
+
+    // Invalidate cache
+    leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
+    statsCache = { data: null, timestamp: null };
+
+    res.json({
+      success: true,
+      message: `Fixed form_id issues successfully`,
+      summary: {
+        mainFormId: mainFormId,
+        nullFormIdUpdated: updateResult.modifiedCount,
+        inconsistentFormIdUpdated: inconsistentUpdate.modifiedCount,
+        totalUpdated: updateResult.modifiedCount + inconsistentUpdate.modifiedCount
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('❌ Error fixing form_id issues:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fix form_id issues',
+      message: error.message
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, async () => {
   console.log(`Facebook Webhook Server is running at http://localhost:${PORT}`);
@@ -1125,6 +1194,7 @@ app.listen(PORT, async () => {
   console.log(`  - Fetch leads: http://localhost:${PORT}/api/fetch-leads (all forms)`);
   console.log(`  - Fetch single form: http://localhost:${PORT}/api/fetch-leads/single`);
   console.log(`  - Discover forms: http://localhost:${PORT}/api/discover-forms`);
+  console.log(`  - Fix form IDs: POST http://localhost:${PORT}/api/fix-form-ids`);
   console.log(`  - Remove manual leads: DELETE http://localhost:${PORT}/api/leads/manual`);
   console.log(`  - Warm cache: http://localhost:${PORT}/api/cache/warm`);
   
