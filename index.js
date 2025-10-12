@@ -15,7 +15,8 @@ const APP_ID = '819463583930088';
 const PAGE_ACCESS_TOKEN = 'EAALpTDvTlugBPm1HZAzt9ii0hBg3lmQ13AZBbQDe9xkYYl0xHggjAei8CZCVFKc3OOecPmk2NWkaUMKqfvmhdrj2gU2ZCKgwvdRJbDSZA8ZAmQnB4CvMKbgJwOooi9ssvTKPRvhMJJkmEeJjk7wdZC45dTMZBSDTS183aPqPocxCRoVWZBQMOCmXTHkjuaAhTNUyDxKq8m4f2';
 const PAGE_ID = '849032321617972';
 const BUSINESS_MANAGER_ID = "3742628306040446";
-const LEADGEN_FORM_ID = "2930627593993454"; // Hardcoded leadgen form ID
+const LEADGEN_FORM_ID = "2930627593993454"; // Fallback form ID
+let forms = {}; // Dynamic forms object - will be populated by discovery
 
 
 // MongoDB configuration
@@ -275,30 +276,67 @@ async function fetchLeadsFromForm(formId) {
   }
 }
 
-// Enhanced auto-fetch function for multiple forms
+// Function to discover all forms from Facebook
+async function discoverAllForms() {
+  try {
+    console.log('🔍 Discovering all forms from Facebook...');
+    
+    const response = await fetch(`https://graph.facebook.com/v23.0/${PAGE_ID}/leadgen_forms?access_token=${PAGE_ACCESS_TOKEN}`);
+    const data = await response.json();
+    
+    if (data.error) {
+      console.error('❌ Error discovering forms:', data.error);
+      return [];
+    }
+    
+    // Populate forms object with discovered form IDs
+    forms = {};
+    data.data.forEach(form => {
+      forms[form.id] = true;
+      console.log(`✅ Discovered form: ${form.id} (${form.name})`);
+    });
+    
+    console.log(`🎉 Discovered ${data.data.length} forms:`, Object.keys(forms));
+    return data.data;
+    
+  } catch (error) {
+    console.error('❌ Error discovering forms:', error.message);
+    return [];
+  }
+}
+
+// Helper function to get all active form IDs
+function getActiveFormIds() {
+  return Object.keys(forms).filter(formId => forms[formId] === true);
+}
+
+// Enhanced auto-fetch function with dynamic form discovery
 async function fetchAllLeadsFromAllForms() {
   try {
     console.log('🔄 Auto-fetching leads from all forms...');
     
-    // Get all unique form IDs from database
-    const formIds = await Lead.distinct('form_id');
+    // 1. FIRST: Discover all forms from Facebook
+    await discoverAllForms();
     
-    if (formIds.length === 0) {
-      console.log('⚠️ No forms found in database, using default form');
-      formIds.push(LEADGEN_FORM_ID);
+    // 2. THEN: Get active form IDs
+    const activeFormIds = getActiveFormIds();
+    
+    // Fallback to hardcoded form if no forms discovered
+    if (activeFormIds.length === 0) {
+      console.log('⚠️ No forms discovered, using fallback form');
+      forms[LEADGEN_FORM_ID] = true;
+      activeFormIds.push(LEADGEN_FORM_ID);
     }
     
-    // Filter out null/undefined form IDs
-    const validFormIds = formIds.filter(id => id && id !== null);
-    
-    console.log(`📋 Found ${validFormIds.length} forms:`, validFormIds);
+    console.log(`📋 Found ${activeFormIds.length} active forms:`, activeFormIds);
     
     let totalNewLeads = 0;
     let totalExistingLeads = 0;
     
-    // Fetch from each form
-    for (const formId of validFormIds) {
+    // 3. FINALLY: Fetch leads from each discovered form
+    for (const formId of activeFormIds) {
       console.log(`🔄 Fetching from form: ${formId}`);
+      
       const result = await fetchLeadsFromForm(formId);
       totalNewLeads += result.newLeads || 0;
       totalExistingLeads += result.existingLeads || 0;
@@ -311,7 +349,7 @@ async function fetchAllLeadsFromAllForms() {
       console.log('🔄 Cache invalidated due to new leads');
     }
     
-    console.log(`🎉 Auto-fetch complete: ${totalNewLeads} new leads, ${totalExistingLeads} existing leads from ${validFormIds.length} forms`);
+    console.log(`🎉 Auto-fetch complete: ${totalNewLeads} new leads, ${totalExistingLeads} existing leads from ${activeFormIds.length} forms`);
     
   } catch (error) {
     console.error('❌ Error auto-fetching all forms:', error.message);
@@ -904,7 +942,7 @@ app.get('/api/forms', async (req, res) => {
   }
 });
 
-// API to get campaigns data
+// API to get campaigns data - now groups by actual form_id dynamically
 app.get('/api/campaigns', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -914,12 +952,12 @@ app.get('/api/campaigns', async (req, res) => {
       });
     }
 
-    // Since all leads are from the same Facebook form, group them as one campaign
+    // Group by form_id dynamically - handles multiple forms
     const campaigns = await Lead.aggregate([
       {
         $group: {
-          _id: '2930627593993454', // Use the main form ID as campaign identifier
-          form_id: { $first: { $ifNull: ['$form_id', '2930627593993454'] } },
+          _id: '$form_id',
+          form_id: { $first: '$form_id' },
           ad_id: { $first: '$ad_id' },
           lead_count: { $sum: 1 },
           latest_lead: { $max: '$created_at' },
@@ -946,7 +984,7 @@ app.get('/api/campaigns', async (req, res) => {
   }
 });
 
-// API to get leads by specific campaign (all leads from the main form)
+// API to get leads by specific campaign - now filters by form_id properly
 app.get('/api/campaigns/:campaignId/leads', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -961,16 +999,17 @@ app.get('/api/campaigns/:campaignId/leads', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
     
-    // Since all leads are from the same Facebook form, fetch all leads
-    // regardless of their form_id value (null or actual form_id)
-    const leads = await Lead.find({})
+    // Filter by form_id - handles both null and actual form IDs
+    const filter = campaignId === 'null' ? { form_id: null } : { form_id: campaignId };
+    
+    const leads = await Lead.find(filter)
       .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
       .sort({ created_at: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
     
-    const totalCount = await Lead.countDocuments({});
+    const totalCount = await Lead.countDocuments(filter);
     
     const totalPages = Math.ceil(totalCount / limit);
     const hasNextPage = page < totalPages;
@@ -1003,7 +1042,7 @@ app.get('/api/campaigns/:campaignId/leads', async (req, res) => {
 // API to manually discover and fetch from all forms
 app.get('/api/discover-forms', async (req, res) => {
   try {
-    console.log('🔍 Discovering all forms from Facebook...');
+    console.log('🔍 Manually discovering all forms from Facebook...');
     
     if (!PAGE_ACCESS_TOKEN || PAGE_ACCESS_TOKEN === 'your_page_access_token_here') {
       return res.status(400).json({
@@ -1012,22 +1051,24 @@ app.get('/api/discover-forms', async (req, res) => {
       });
     }
     
-    // Get all forms from Facebook Graph API
-    const response = await fetch(`https://graph.facebook.com/v23.0/${PAGE_ID}/leadgen_forms?access_token=${PAGE_ACCESS_TOKEN}`);
-    const forms = await response.json();
+    // Use our new discoverAllForms function
+    const discoveredForms = await discoverAllForms();
     
-    if (forms.error) {
-      throw new Error(`Graph API error: ${forms.error.message}`);
+    if (discoveredForms.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No forms discovered from Facebook'
+      });
     }
     
-    console.log(`📋 Found ${forms.data.length} forms from Facebook`);
+    console.log(`📋 Found ${discoveredForms.length} forms from Facebook`);
     
     // Fetch leads from each discovered form
     let totalNewLeads = 0;
     let totalExistingLeads = 0;
     const formResults = [];
     
-    for (const form of forms.data) {
+    for (const form of discoveredForms) {
       console.log(`🔄 Fetching leads from form: ${form.id}`);
       const result = await fetchLeadsFromForm(form.id);
       totalNewLeads += result.newLeads || 0;
@@ -1050,13 +1091,13 @@ app.get('/api/discover-forms', async (req, res) => {
     
     res.json({
       success: true,
-      message: `Discovered ${forms.data.length} forms`,
-      forms: forms.data,
+      message: `Discovered ${discoveredForms.length} forms`,
+      forms: discoveredForms,
       formResults: formResults,
       summary: {
         totalNewLeads: totalNewLeads,
         totalExistingLeads: totalExistingLeads,
-        formsProcessed: forms.data.length
+        formsProcessed: discoveredForms.length
       },
       timestamp: new Date().toISOString()
     });
