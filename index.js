@@ -914,11 +914,12 @@ app.get('/api/campaigns', async (req, res) => {
       });
     }
 
-    // Group by form_id since ad_id is mostly null
+    // Since all leads are from the same Facebook form, group them as one campaign
     const campaigns = await Lead.aggregate([
       {
         $group: {
-          _id: '$form_id',
+          _id: '2930627593993454', // Use the main form ID as campaign identifier
+          form_id: { $first: { $ifNull: ['$form_id', '2930627593993454'] } },
           ad_id: { $first: '$ad_id' },
           lead_count: { $sum: 1 },
           latest_lead: { $max: '$created_at' },
@@ -945,7 +946,7 @@ app.get('/api/campaigns', async (req, res) => {
   }
 });
 
-// API to get leads by specific campaign (form_id)
+// API to get leads by specific campaign (all leads from the main form)
 app.get('/api/campaigns/:campaignId/leads', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -960,15 +961,16 @@ app.get('/api/campaigns/:campaignId/leads', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
     
-    // Filter by form_id since campaigns are now grouped by form_id
-    const leads = await Lead.find({ form_id: campaignId })
+    // Since all leads are from the same Facebook form, fetch all leads
+    // regardless of their form_id value (null or actual form_id)
+    const leads = await Lead.find({})
       .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
       .sort({ created_at: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
     
-    const totalCount = await Lead.countDocuments({ form_id: campaignId });
+    const totalCount = await Lead.countDocuments({});
     
     const totalPages = Math.ceil(totalCount / limit);
     const hasNextPage = page < totalPages;
