@@ -206,7 +206,120 @@ app.post('/webhook', (req, res) => {
   res.status(200).send('EVENT_RECEIVED');
 });
 
-// Automatically fetch all leads from the hardcoded leadgen form
+// Enhanced function to fetch leads from specific form
+async function fetchLeadsFromForm(formId) {
+  console.log(`🔄 Fetching leads from form: ${formId}`);
+  
+  if (!PAGE_ACCESS_TOKEN || PAGE_ACCESS_TOKEN === 'your_page_access_token_here') {
+    console.error('❌ PAGE_ACCESS_TOKEN not set');
+    return { newLeads: 0, existingLeads: 0 };
+  }
+
+  try {
+    console.log(`📡 Making Graph API call to: https://graph.facebook.com/v23.0/${formId}/leads`);
+    const response = await fetch(`https://graph.facebook.com/v23.0/${formId}/leads?access_token=${PAGE_ACCESS_TOKEN}`);
+    const data = await response.json();
+    
+    console.log(`📊 Graph API Response for form ${formId}:`, JSON.stringify(data, null, 2));
+    
+    if (data.error) {
+      console.error(`❌ Graph API Error for form ${formId}:`, data.error);
+      return { newLeads: 0, existingLeads: 0 };
+    }
+
+    if (!data.data || !Array.isArray(data.data)) {
+      console.log(`⚠️ No leads data received for form ${formId}`);
+      return { newLeads: 0, existingLeads: 0 };
+    }
+
+    console.log(`📋 Found ${data.data.length} leads in form ${formId}`);
+    
+    let newLeadsCount = 0;
+    let existingLeadsCount = 0;
+
+    // Process each lead
+    for (const leadData of data.data) {
+      // Check if lead already exists
+      const existingLead = await Lead.findOne({ lead_id: leadData.id });
+      if (existingLead) {
+        existingLeadsCount++;
+        console.log(`⚠️ Lead ${leadData.id} already exists, skipping`);
+        continue;
+      }
+
+      // Create new lead using Mongoose
+      const newLead = new Lead({
+        lead_id: leadData.id,
+        ad_id: leadData.ad_id,
+        form_id: leadData.form_id,
+        created_time: new Date(leadData.created_time),
+        field_data: leadData.field_data,
+        platform: 'facebook',
+        source: 'leadgen_form',
+        business_manager_id: BUSINESS_MANAGER_ID,
+        page_id: PAGE_ID,
+        raw_data: leadData
+      });
+
+      const savedLead = await newLead.save();
+      newLeadsCount++;
+      console.log(`✅ New lead saved from form ${formId}: ${leadData.id} - ${leadData.field_data.find(f => f.name === 'full_name')?.values[0] || 'Unknown'}`);
+    }
+
+    return { newLeads: newLeadsCount, existingLeads: existingLeadsCount };
+    
+  } catch (error) {
+    console.error(`❌ Error fetching form ${formId}:`, error.message);
+    console.error('Full error:', error);
+    return { newLeads: 0, existingLeads: 0 };
+  }
+}
+
+// Enhanced auto-fetch function for multiple forms
+async function fetchAllLeadsFromAllForms() {
+  try {
+    console.log('🔄 Auto-fetching leads from all forms...');
+    
+    // Get all unique form IDs from database
+    const formIds = await Lead.distinct('form_id');
+    
+    if (formIds.length === 0) {
+      console.log('⚠️ No forms found in database, using default form');
+      formIds.push(LEADGEN_FORM_ID);
+    }
+    
+    // Filter out null/undefined form IDs
+    const validFormIds = formIds.filter(id => id && id !== null);
+    
+    console.log(`📋 Found ${validFormIds.length} forms:`, validFormIds);
+    
+    let totalNewLeads = 0;
+    let totalExistingLeads = 0;
+    
+    // Fetch from each form
+    for (const formId of validFormIds) {
+      console.log(`🔄 Fetching from form: ${formId}`);
+      const result = await fetchLeadsFromForm(formId);
+      totalNewLeads += result.newLeads || 0;
+      totalExistingLeads += result.existingLeads || 0;
+    }
+    
+    // Invalidate cache if new leads were added
+    if (totalNewLeads > 0) {
+      leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
+      statsCache = { data: null, timestamp: null };
+      console.log('🔄 Cache invalidated due to new leads');
+    }
+    
+    console.log(`🎉 Auto-fetch complete: ${totalNewLeads} new leads, ${totalExistingLeads} existing leads from ${validFormIds.length} forms`);
+    
+  } catch (error) {
+    console.error('❌ Error auto-fetching all forms:', error.message);
+    console.error('Full error:', error);
+  }
+}
+
+// Legacy function for backward compatibility
 async function fetchAllLeadsFromForm() {
   console.log(`🔄 Auto-fetching all leads from form: ${LEADGEN_FORM_ID}`);
   
@@ -274,7 +387,6 @@ async function fetchAllLeadsFromForm() {
     }
 
     console.log(`🎉 Auto-fetch complete: ${newLeadsCount} new leads, ${existingLeadsCount} existing leads`);
-
 
   } catch (error) {
     console.error('❌ Error auto-fetching leads:', error.message);
@@ -600,22 +712,21 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-// Auto-fetch leads every 10 minutes (600000 ms) - reduced frequency for better performance
+// Auto-fetch leads every 10 minutes (600000 ms) - now supports multiple forms
 setInterval(() => {
   console.log('⏰ Auto-fetch timer triggered');
-  fetchAllLeadsFromForm();
+  fetchAllLeadsFromAllForms(); // Use new multi-form function
 }, 10 * 60 * 1000);
 
-// API endpoint to manually trigger lead fetching
+// API endpoint to manually trigger lead fetching (now supports multiple forms)
 app.get('/api/fetch-leads', async (req, res) => {
   try {
     console.log('🔄 Manual lead fetch triggered via API');
     
-    
-    await fetchAllLeadsFromForm();
+    await fetchAllLeadsFromAllForms(); // Use new multi-form function
     res.json({
       success: true,
-      message: 'Lead fetch completed successfully',
+      message: 'Lead fetch completed successfully (all forms)',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -623,6 +734,27 @@ app.get('/api/fetch-leads', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to fetch leads',
+      message: error.message
+    });
+  }
+});
+
+// API endpoint to manually trigger single form lead fetching (legacy)
+app.get('/api/fetch-leads/single', async (req, res) => {
+  try {
+    console.log('🔄 Manual single form lead fetch triggered via API');
+    
+    await fetchAllLeadsFromForm(); // Use legacy single form function
+    res.json({
+      success: true,
+      message: 'Single form lead fetch completed successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error in manual single form lead fetch:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch leads from single form',
       message: error.message
     });
   }
@@ -733,6 +865,208 @@ app.delete('/api/leads/manual', async (req, res) => {
   }
 });
 
+// API to get all unique forms from database
+app.get('/api/forms', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not connected'
+      });
+    }
+
+    const forms = await Lead.aggregate([
+      {
+        $group: {
+          _id: '$form_id',
+          lead_count: { $sum: 1 },
+          campaigns: { $addToSet: '$ad_id' },
+          latest_lead: { $max: '$created_at' },
+          platforms: { $addToSet: '$platform' }
+        }
+      },
+      { $sort: { lead_count: -1 } }
+    ]);
+    
+    res.json({
+      success: true,
+      data: forms,
+      count: forms.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error fetching forms:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch forms',
+      message: error.message 
+    });
+  }
+});
+
+// API to get campaigns data
+app.get('/api/campaigns', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not connected'
+      });
+    }
+
+    const campaigns = await Lead.aggregate([
+      {
+        $group: {
+          _id: '$ad_id',
+          form_id: { $first: '$form_id' },
+          lead_count: { $sum: 1 },
+          latest_lead: { $max: '$created_at' },
+          platforms: { $addToSet: '$platform' },
+          sources: { $addToSet: '$source' }
+        }
+      },
+      { $sort: { lead_count: -1 } }
+    ]);
+    
+    res.json({
+      success: true,
+      data: campaigns,
+      count: campaigns.length,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error fetching campaigns:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch campaigns',
+      message: error.message 
+    });
+  }
+});
+
+// API to get leads by specific campaign
+app.get('/api/campaigns/:campaignId/leads', async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        error: 'Database not connected'
+      });
+    }
+
+    const { campaignId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+    
+    const leads = await Lead.find({ ad_id: campaignId })
+      .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
+      .sort({ created_at: -1 })
+      .skip(skip)
+      .limit(limit)
+      .lean();
+    
+    const totalCount = await Lead.countDocuments({ ad_id: campaignId });
+    
+    const totalPages = Math.ceil(totalCount / limit);
+    const hasNextPage = page < totalPages;
+    const hasPrevPage = page > 1;
+    
+    res.json({
+      success: true,
+      data: leads,
+      pagination: {
+        currentPage: page,
+        totalPages: totalPages,
+        totalCount: totalCount,
+        limit: limit,
+        hasNextPage: hasNextPage,
+        hasPrevPage: hasPrevPage
+      },
+      campaignId: campaignId,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('❌ Error fetching campaign leads:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch campaign leads',
+      message: error.message
+    });
+  }
+});
+
+// API to manually discover and fetch from all forms
+app.get('/api/discover-forms', async (req, res) => {
+  try {
+    console.log('🔍 Discovering all forms from Facebook...');
+    
+    if (!PAGE_ACCESS_TOKEN || PAGE_ACCESS_TOKEN === 'your_page_access_token_here') {
+      return res.status(400).json({
+        success: false,
+        error: 'PAGE_ACCESS_TOKEN not configured'
+      });
+    }
+    
+    // Get all forms from Facebook Graph API
+    const response = await fetch(`https://graph.facebook.com/v23.0/${PAGE_ID}/leadgen_forms?access_token=${PAGE_ACCESS_TOKEN}`);
+    const forms = await response.json();
+    
+    if (forms.error) {
+      throw new Error(`Graph API error: ${forms.error.message}`);
+    }
+    
+    console.log(`📋 Found ${forms.data.length} forms from Facebook`);
+    
+    // Fetch leads from each discovered form
+    let totalNewLeads = 0;
+    let totalExistingLeads = 0;
+    const formResults = [];
+    
+    for (const form of forms.data) {
+      console.log(`🔄 Fetching leads from form: ${form.id}`);
+      const result = await fetchLeadsFromForm(form.id);
+      totalNewLeads += result.newLeads || 0;
+      totalExistingLeads += result.existingLeads || 0;
+      
+      formResults.push({
+        form_id: form.id,
+        form_name: form.name,
+        newLeads: result.newLeads || 0,
+        existingLeads: result.existingLeads || 0
+      });
+    }
+    
+    // Invalidate cache if new leads were added
+    if (totalNewLeads > 0) {
+      leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
+      statsCache = { data: null, timestamp: null };
+      console.log('🔄 Cache invalidated due to new leads');
+    }
+    
+    res.json({
+      success: true,
+      message: `Discovered ${forms.data.length} forms`,
+      forms: forms.data,
+      formResults: formResults,
+      summary: {
+        totalNewLeads: totalNewLeads,
+        totalExistingLeads: totalExistingLeads,
+        formsProcessed: forms.data.length
+      },
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error discovering forms:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to discover forms',
+      message: error.message
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, async () => {
   console.log(`Facebook Webhook Server is running at http://localhost:${PORT}`);
@@ -740,7 +1074,12 @@ app.listen(PORT, async () => {
   console.log(`API endpoints:`);
   console.log(`  - Leads: http://localhost:${PORT}/api/leads (with pagination & caching)`);
   console.log(`  - Stats: http://localhost:${PORT}/api/stats (cached)`);
-  console.log(`  - Fetch leads: http://localhost:${PORT}/api/fetch-leads`);
+  console.log(`  - Forms: http://localhost:${PORT}/api/forms (all forms from database)`);
+  console.log(`  - Campaigns: http://localhost:${PORT}/api/campaigns (all campaigns)`);
+  console.log(`  - Campaign leads: http://localhost:${PORT}/api/campaigns/:campaignId/leads`);
+  console.log(`  - Fetch leads: http://localhost:${PORT}/api/fetch-leads (all forms)`);
+  console.log(`  - Fetch single form: http://localhost:${PORT}/api/fetch-leads/single`);
+  console.log(`  - Discover forms: http://localhost:${PORT}/api/discover-forms`);
   console.log(`  - Remove manual leads: DELETE http://localhost:${PORT}/api/leads/manual`);
   console.log(`  - Warm cache: http://localhost:${PORT}/api/cache/warm`);
   
@@ -755,13 +1094,15 @@ app.listen(PORT, async () => {
   console.log(`Business Manager ID: ${BUSINESS_MANAGER_ID}`);
   console.log(`Page Access Token: ${PAGE_ACCESS_TOKEN.substring(0, 20)}...`);
   console.log('MongoDB connection configured with Mongoose');
-  console.log('\n⏰ Auto-fetch configured: Every 10 minutes (optimized for performance)');
-  console.log('🔄 Manual fetch endpoint: /api/fetch-leads');
-  console.log('🚀 Latest deployment: Auto-fetch enabled');
+  console.log('\n⏰ Auto-fetch configured: Every 10 minutes (multi-form support)');
+  console.log('🔄 Manual fetch endpoints: /api/fetch-leads (all forms), /api/fetch-leads/single');
+  console.log('🔍 Form discovery: /api/discover-forms');
+  console.log('📊 Campaign analytics: /api/campaigns, /api/forms');
+  console.log('🚀 Latest deployment: Multi-form auto-fetch enabled');
   
-  // Initial fetch after 5 seconds
+  // Initial fetch after 5 seconds (multi-form)
   setTimeout(() => {
-    console.log('\n🚀 Performing initial lead fetch...');
-    fetchAllLeadsFromForm();
+    console.log('\n🚀 Performing initial multi-form lead fetch...');
+    fetchAllLeadsFromAllForms();
   }, 5000);
 }); 
