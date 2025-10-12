@@ -383,7 +383,7 @@ async function fetchAllLeadsFromForm() {
     if (newLeadsCount > 0) {
       leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
       statsCache = { data: null, timestamp: null };
-      console.log('🔄 Cache invalidated due to new leads');
+      console.log('🔄 Cache invalidated due to new leads');   
     }
 
     console.log(`🎉 Auto-fetch complete: ${newLeadsCount} new leads, ${existingLeadsCount} existing leads`);
@@ -393,7 +393,7 @@ async function fetchAllLeadsFromForm() {
     console.error('Full error:', error);
   }
 }
-
+   
 // Fetch full lead details from Graph API and save to MongoDB using Mongoose
 async function fetchLeadDetails(leadgenId) {
   console.log(`🔍 Fetching lead details for ID: ${leadgenId}`);
@@ -914,11 +914,12 @@ app.get('/api/campaigns', async (req, res) => {
       });
     }
 
+    // Group by form_id since ad_id is mostly null
     const campaigns = await Lead.aggregate([
       {
         $group: {
-          _id: '$ad_id',
-          form_id: { $first: '$form_id' },
+          _id: '$form_id',
+          ad_id: { $first: '$ad_id' },
           lead_count: { $sum: 1 },
           latest_lead: { $max: '$created_at' },
           platforms: { $addToSet: '$platform' },
@@ -944,7 +945,7 @@ app.get('/api/campaigns', async (req, res) => {
   }
 });
 
-// API to get leads by specific campaign
+// API to get leads by specific campaign (form_id)
 app.get('/api/campaigns/:campaignId/leads', async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -959,14 +960,15 @@ app.get('/api/campaigns/:campaignId/leads', async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
     
-    const leads = await Lead.find({ ad_id: campaignId })
+    // Filter by form_id since campaigns are now grouped by form_id
+    const leads = await Lead.find({ form_id: campaignId })
       .select('lead_id ad_id form_id created_time field_data platform source business_manager_id page_id created_at updated_at')
       .sort({ created_at: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
     
-    const totalCount = await Lead.countDocuments({ ad_id: campaignId });
+    const totalCount = await Lead.countDocuments({ form_id: campaignId });
     
     const totalPages = Math.ceil(totalCount / limit);
     const hasNextPage = page < totalPages;
