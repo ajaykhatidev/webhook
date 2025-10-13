@@ -21,7 +21,7 @@ let forms = {}; // Dynamic forms object - will be populated by discovery
 // WhatsApp Cloud API Configuration (No Business Verification Required)
 const WHATSAPP_ACCESS_TOKEN = 'EAALpTDvTlugBPsTZCycZC2V6xCHACQOxMEWc4IaspsFYcUtcC3GZA7r5YPK1LUKJg2iEVVhSezJv9Gc9GII0xGqkUG7sU3uqhchQEbwDZAGknoyzzuhgE3fVcCOhMbgTGvZA7GYWanQYcYdmr34gG0UClPkqBN8ArcQTEivvtdDxZAmOiUWcnqNZAHCs1uKnwZDZD';
 const WHATSAPP_PHONE_NUMBER_ID = '1099495012353656'; // This might work with Cloud API
-const WHATSAPP_RECIPIENT_NUMBER = '1234567890'; // Replace with your actual phone number (format: 1234567890)
+const WHATSAPP_RECIPIENT_NUMBER = '7300733744'; // Your phone number for WhatsApp notifications
 const WHATSAPP_ENABLED = true; // Set to false to disable WhatsApp notifications
 
 // Alternative: WhatsApp Web API (using WhatsApp Web)
@@ -1429,6 +1429,108 @@ app.post('/api/test-webhook', async (req, res) => {
   }
 });
 
+// API endpoint to create test lead with your phone number
+app.post('/api/create-test-lead', async (req, res) => {
+  try {
+    console.log('📱 Creating test lead with your phone number...');
+    
+    const testLeadData = {
+      lead_id: 'TEST_LEAD_' + Date.now(),
+      field_data: [
+        { name: 'full_name', values: ['Test User'] },
+        { name: 'email', values: ['test@example.com'] },
+        { name: 'phone_number', values: ['7300733744'] },
+        { name: 'city', values: ['Test City'] }
+      ],
+      platform: 'manual',
+      source: 'Test Lead Creation',
+      created_time: new Date(),
+      business_manager_id: BUSINESS_MANAGER_ID,
+      page_id: PAGE_ID,
+      raw_data: {
+        name: 'Test User',
+        email: 'test@example.com',
+        phone: '7300733744',
+        city: 'Test City'
+      }
+    };
+
+    // Save to database
+    const newLead = new Lead(testLeadData);
+    const savedLead = await newLead.save();
+    console.log('✅ Test lead saved to MongoDB:', savedLead._id);
+    
+    // Send WhatsApp notification
+    const whatsappResult = await sendWhatsAppNotification(testLeadData);
+    
+    res.json({
+      success: true,
+      message: 'Test lead created and WhatsApp notification sent',
+      lead: savedLead,
+      whatsappResult: whatsappResult,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error creating test lead:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create test lead',
+      message: error.message
+    });
+  }
+});
+
+// API endpoint to send WhatsApp message to your number
+app.post('/api/send-whatsapp-to-me', async (req, res) => {
+  try {
+    console.log('📱 Sending WhatsApp message to your number: 7300733744');
+    
+    const { message } = req.body;
+    const customMessage = message || `🎯 *TEST MESSAGE FROM YOUR LEAD SYSTEM*
+
+📱 *Message Details:*
+• Time: ${new Date().toLocaleString()}
+• From: Lead Management System
+• Status: System Test
+
+🚀 This is a test message to verify WhatsApp integration!`;
+
+    const testLeadData = {
+      lead_id: 'CUSTOM_MESSAGE_' + Date.now(),
+      field_data: [
+        { name: 'full_name', values: ['Custom Message Test'] },
+        { name: 'email', values: ['custom@test.com'] },
+        { name: 'phone_number', values: ['7300733744'] }
+      ],
+      platform: 'manual',
+      created_time: new Date()
+    };
+
+    // Override the message in the notification function
+    const originalMessage = testLeadData.field_data;
+    testLeadData.customMessage = customMessage;
+    
+    const result = await sendWhatsAppCloudAPI(testLeadData);
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'WhatsApp message sent successfully' : 'WhatsApp message failed',
+      result: result,
+      recipient: '7300733744',
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error sending WhatsApp message:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send WhatsApp message',
+      message: error.message
+    });
+  }
+});
+
 // API endpoint to discover WhatsApp phone numbers
 app.get('/api/whatsapp-phone-numbers', async (req, res) => {
   try {
@@ -1576,6 +1678,10 @@ app.listen(PORT, async () => {
   console.log(`  - Remove manual leads: DELETE http://localhost:${PORT}/api/leads/manual`);
   console.log(`  - Warm cache: http://localhost:${PORT}/api/cache/warm`);
   console.log(`  - Test WhatsApp: POST http://localhost:${PORT}/api/test-whatsapp`);
+  console.log(`  - Test Cloud API: POST http://localhost:${PORT}/api/test-whatsapp-cloud`);
+  console.log(`  - Test Webhook: POST http://localhost:${PORT}/api/test-webhook`);
+  console.log(`  - Create Test Lead: POST http://localhost:${PORT}/api/create-test-lead`);
+  console.log(`  - Send WhatsApp to Me: POST http://localhost:${PORT}/api/send-whatsapp-to-me`);
   console.log(`  - WhatsApp config: POST http://localhost:${PORT}/api/whatsapp-config`);
   console.log(`  - Discover phone numbers: GET http://localhost:${PORT}/api/whatsapp-phone-numbers`);
   
