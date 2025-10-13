@@ -20,7 +20,8 @@ let forms = {}; // Dynamic forms object - will be populated by discovery
 
 // WhatsApp Cloud API Configuration (No Business Verification Required)
 const WHATSAPP_ACCESS_TOKEN = 'EAALpTDvTlugBPsTZCycZC2V6xCHACQOxMEWc4IaspsFYcUtcC3GZA7r5YPK1LUKJg2iEVVhSezJv9Gc9GII0xGqkUG7sU3uqhchQEbwDZAGknoyzzuhgE3fVcCOhMbgTGvZA7GYWanQYcYdmr34gG0UClPkqBN8ArcQTEivvtdDxZAmOiUWcnqNZAHCs1uKnwZDZD';
-const WHATSAPP_PHONE_NUMBER_ID = '1099495012353656'; // This might work with Cloud API
+const WHATSAPP_BUSINESS_ACCOUNT_ID = '1099495012353656'; // Your WhatsApp Business Account ID
+const WHATSAPP_PHONE_NUMBER_ID = 'AUTO_DISCOVER'; // Will be discovered automatically
 const WHATSAPP_RECIPIENT_NUMBER = '7300733744'; // Your phone number for WhatsApp notifications
 const WHATSAPP_ENABLED = true; // Set to false to disable WhatsApp notifications
 
@@ -104,6 +105,22 @@ async function sendWhatsAppCloudAPI(leadData) {
   try {
     console.log('📱 Sending WhatsApp via Cloud API...');
     
+    // First, try to discover phone numbers if we don't have a valid phone number ID
+    let phoneNumberId = WHATSAPP_PHONE_NUMBER_ID;
+    
+    if (phoneNumberId === 'AUTO_DISCOVER' || phoneNumberId === '1099495012353656') {
+      console.log('🔍 Auto-discovering WhatsApp phone numbers...');
+      const phoneNumbers = await discoverWhatsAppPhoneNumbers();
+      
+      if (phoneNumbers.data && phoneNumbers.data.length > 0) {
+        phoneNumberId = phoneNumbers.data[0].id;
+        console.log(`✅ Found phone number ID: ${phoneNumberId}`);
+      } else {
+        console.log('❌ No phone numbers found, using fallback method');
+        return { success: false, method: 'cloud_api', error: 'No phone numbers found' };
+      }
+    }
+    
     // Extract lead information
     const name = extractFieldValue(leadData.field_data, 'full_name') || 'Unknown';
     const email = extractFieldValue(leadData.field_data, 'email') || 'No email';
@@ -124,8 +141,8 @@ async function sendWhatsAppCloudAPI(leadData) {
 
 🚀 Lead has been automatically saved to your dashboard!`;
 
-    // Try Cloud API endpoint
-    const cloudApiUrl = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+    // Try Cloud API endpoint with discovered phone number ID
+    const cloudApiUrl = `https://graph.facebook.com/v18.0/${phoneNumberId}/messages`;
     
     const payload = {
       messaging_product: "whatsapp",
@@ -137,6 +154,7 @@ async function sendWhatsAppCloudAPI(leadData) {
     };
 
     console.log('📱 Cloud API Payload:', JSON.stringify(payload, null, 2));
+    console.log('📱 Using Phone Number ID:', phoneNumberId);
 
     const response = await fetch(cloudApiUrl, {
       method: 'POST',
@@ -151,7 +169,7 @@ async function sendWhatsAppCloudAPI(leadData) {
     
     if (response.ok) {
       console.log('✅ WhatsApp Cloud API notification sent successfully:', result);
-      return { success: true, method: 'cloud_api', result };
+      return { success: true, method: 'cloud_api', result, phoneNumberId };
     } else {
       console.error('❌ WhatsApp Cloud API failed:', result);
       return { success: false, method: 'cloud_api', error: result };
@@ -195,7 +213,7 @@ async function discoverWhatsAppPhoneNumbers() {
     console.log('🔍 Discovering WhatsApp phone numbers...');
     
     // Try to get phone numbers from the business account
-    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/phone_numbers?access_token=${WHATSAPP_ACCESS_TOKEN}`);
+    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_BUSINESS_ACCOUNT_ID}/phone_numbers?access_token=${WHATSAPP_ACCESS_TOKEN}`);
     const data = await response.json();
     
     console.log('📱 WhatsApp Phone Numbers Response:', JSON.stringify(data, null, 2));
