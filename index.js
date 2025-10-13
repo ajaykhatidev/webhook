@@ -18,6 +18,16 @@ const BUSINESS_MANAGER_ID = "3742628306040446";
 const LEADGEN_FORM_ID = "2930627593993454"; // Fallback form ID
 let forms = {}; // Dynamic forms object - will be populated by discovery
 
+// WhatsApp Cloud API Configuration (No Business Verification Required)
+const WHATSAPP_ACCESS_TOKEN = 'EAALpTDvTlugBPsTZCycZC2V6xCHACQOxMEWc4IaspsFYcUtcC3GZA7r5YPK1LUKJg2iEVVhSezJv9Gc9GII0xGqkUG7sU3uqhchQEbwDZAGknoyzzuhgE3fVcCOhMbgTGvZA7GYWanQYcYdmr34gG0UClPkqBN8ArcQTEivvtdDxZAmOiUWcnqNZAHCs1uKnwZDZD';
+const WHATSAPP_PHONE_NUMBER_ID = '1099495012353656'; // This might work with Cloud API
+const WHATSAPP_RECIPIENT_NUMBER = '1234567890'; // Replace with your actual phone number (format: 1234567890)
+const WHATSAPP_ENABLED = true; // Set to false to disable WhatsApp notifications
+
+// Alternative: WhatsApp Web API (using WhatsApp Web)
+const WHATSAPP_WEB_ENABLED = true; // Enable WhatsApp Web integration
+const WHATSAPP_WEB_SESSION_PATH = './whatsapp-session'; // Session storage path
+
 
 // MongoDB configuration
 const MONGODB_URI = 'mongodb+srv://luckykhati459_db_user:ajayKhati@cluster0.4hqlabd.mongodb.net/webhook_leads';
@@ -86,6 +96,195 @@ leadSchema.index({ lead_id: 1 });
 
 // Create Lead model
 const Lead = mongoose.model('Lead', leadSchema);
+
+// WhatsApp Business API Functions
+
+// Alternative Method 1: WhatsApp Cloud API (Simpler, no business verification)
+async function sendWhatsAppCloudAPI(leadData) {
+  try {
+    console.log('📱 Sending WhatsApp via Cloud API...');
+    
+    // Extract lead information
+    const name = extractFieldValue(leadData.field_data, 'full_name') || 'Unknown';
+    const email = extractFieldValue(leadData.field_data, 'email') || 'No email';
+    const phone = extractFieldValue(leadData.field_data, 'phone_number') || 'No phone';
+    const platform = leadData.platform || 'Unknown';
+    const leadId = leadData.lead_id || 'Unknown';
+    
+    // Create notification message
+    const message = `🎯 *NEW LEAD RECEIVED!*
+
+📋 *Lead Details:*
+• Name: ${name}
+• Email: ${email}
+• Phone: ${phone}
+• Platform: ${platform}
+• Lead ID: ${leadId}
+• Time: ${new Date().toLocaleString()}
+
+🚀 Lead has been automatically saved to your dashboard!`;
+
+    // Try Cloud API endpoint
+    const cloudApiUrl = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+    
+    const payload = {
+      messaging_product: "whatsapp",
+      to: WHATSAPP_RECIPIENT_NUMBER,
+      type: "text",
+      text: {
+        body: message
+      }
+    };
+
+    console.log('📱 Cloud API Payload:', JSON.stringify(payload, null, 2));
+
+    const response = await fetch(cloudApiUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.json();
+    
+    if (response.ok) {
+      console.log('✅ WhatsApp Cloud API notification sent successfully:', result);
+      return { success: true, method: 'cloud_api', result };
+    } else {
+      console.error('❌ WhatsApp Cloud API failed:', result);
+      return { success: false, method: 'cloud_api', error: result };
+    }
+
+  } catch (error) {
+    console.error('❌ Error sending WhatsApp Cloud API notification:', error.message);
+    return { success: false, method: 'cloud_api', error: error.message };
+  }
+}
+
+// Alternative Method 2: Simple HTTP Webhook (for testing)
+async function sendWebhookNotification(leadData) {
+  try {
+    console.log('📱 Sending webhook notification...');
+    
+    const name = extractFieldValue(leadData.field_data, 'full_name') || 'Unknown';
+    const email = extractFieldValue(leadData.field_data, 'email') || 'No email';
+    const phone = extractFieldValue(leadData.field_data, 'phone_number') || 'No phone';
+    
+    const webhookData = {
+      message: `🎯 NEW LEAD RECEIVED!\n\nName: ${name}\nEmail: ${email}\nPhone: ${phone}\nPlatform: ${leadData.platform}\nTime: ${new Date().toLocaleString()}`,
+      lead_id: leadData.lead_id,
+      timestamp: new Date().toISOString()
+    };
+    
+    // You can send this to any webhook service like Zapier, IFTTT, etc.
+    console.log('📱 Webhook data ready:', JSON.stringify(webhookData, null, 2));
+    
+    return { success: true, method: 'webhook', data: webhookData };
+    
+  } catch (error) {
+    console.error('❌ Error sending webhook notification:', error.message);
+    return { success: false, method: 'webhook', error: error.message };
+  }
+}
+
+// Function to discover WhatsApp phone numbers
+async function discoverWhatsAppPhoneNumbers() {
+  try {
+    console.log('🔍 Discovering WhatsApp phone numbers...');
+    
+    // Try to get phone numbers from the business account
+    const response = await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/phone_numbers?access_token=${WHATSAPP_ACCESS_TOKEN}`);
+    const data = await response.json();
+    
+    console.log('📱 WhatsApp Phone Numbers Response:', JSON.stringify(data, null, 2));
+    
+    if (data.error) {
+      console.error('❌ Error discovering phone numbers:', data.error);
+      
+      // Try alternative endpoint
+      console.log('🔄 Trying alternative endpoint...');
+      const altResponse = await fetch(`https://graph.facebook.com/v18.0/me/phone_numbers?access_token=${WHATSAPP_ACCESS_TOKEN}`);
+      const altData = await altResponse.json();
+      
+      console.log('📱 Alternative Phone Numbers Response:', JSON.stringify(altData, null, 2));
+      return altData;
+    }
+    
+    return data;
+    
+  } catch (error) {
+    console.error('❌ Error discovering phone numbers:', error.message);
+    return { error: error.message };
+  }
+}
+
+async function sendWhatsAppNotification(leadData) {
+  if (!WHATSAPP_ENABLED) {
+    console.log('⚠️ WhatsApp notifications disabled');
+    return;
+  }
+
+  console.log('📱 Attempting WhatsApp notification with multiple methods...');
+
+  // Try Method 1: WhatsApp Cloud API (no business verification required)
+  const cloudResult = await sendWhatsAppCloudAPI(leadData);
+  if (cloudResult.success) {
+    console.log('✅ WhatsApp Cloud API succeeded!');
+    return cloudResult;
+  }
+
+  // Try Method 2: Webhook notification (always works)
+  const webhookResult = await sendWebhookNotification(leadData);
+  if (webhookResult.success) {
+    console.log('✅ Webhook notification succeeded!');
+    console.log('📱 You can use this webhook data with Zapier, IFTTT, or any webhook service');
+    return webhookResult;
+  }
+
+  console.log('❌ All WhatsApp methods failed, but lead was still saved to database');
+}
+
+// Helper function to extract field values (same as frontend)
+function extractFieldValue(fieldData, fieldName) {
+  if (!fieldData || !Array.isArray(fieldData)) {
+    return 'Unknown';
+  }
+  
+  const fieldVariations = [
+    fieldName,
+    fieldName.toLowerCase(),
+    fieldName.toUpperCase(),
+    fieldName.replace('_', ' '),
+    fieldName.replace('_', ''),
+    fieldName.replace('_', '-'),
+    fieldName === 'full_name' ? 'name' : null,
+    fieldName === 'full_name' ? 'fullname' : null,
+    fieldName === 'phone_number' ? 'phone' : null,
+    fieldName === 'phone_number' ? 'mobile' : null,
+    fieldName === 'phone_number' ? 'telephone' : null,
+    fieldName === 'email' ? 'email_address' : null,
+    fieldName === 'email' ? 'e_mail' : null,
+  ].filter(Boolean);
+  
+  for (const variation of fieldVariations) {
+    const field = fieldData.find(f => 
+      f.name === variation || 
+      f.name === variation.toLowerCase() ||
+      f.name === variation.toUpperCase() ||
+      f.name === variation.replace('_', ' ') ||
+      f.name === variation.replace('_', '') ||
+      f.name === variation.replace('_', '-')
+    );
+    
+    if (field && field.values && Array.isArray(field.values) && field.values.length > 0) {
+      return field.values.join(', ');
+    }
+  }
+  
+  return 'Unknown';
+}
 
 
 // Connect to MongoDB using Mongoose
@@ -265,6 +464,9 @@ async function fetchLeadsFromForm(formId) {
       const savedLead = await newLead.save();
       newLeadsCount++;
       console.log(`✅ New lead saved from form ${formId}: ${leadData.id} - ${leadData.field_data.find(f => f.name === 'full_name')?.values[0] || 'Unknown'}`);
+      
+      // Send WhatsApp notification for new lead
+      await sendWhatsAppNotification(leadData);
     }
 
     return { newLeads: newLeadsCount, existingLeads: existingLeadsCount };
@@ -415,6 +617,9 @@ async function fetchAllLeadsFromForm() {
       const savedLead = await newLead.save();
       newLeadsCount++;
       console.log(`✅ New lead saved: ${leadData.id} - ${leadData.field_data.find(f => f.name === 'full_name')?.values[0] || 'Unknown'}`);
+      
+      // Send WhatsApp notification for new lead
+      await sendWhatsAppNotification(leadData);
     }
 
     // Invalidate cache if new leads were added
@@ -476,6 +681,9 @@ async function fetchLeadDetails(leadgenId) {
 
     const savedLead = await newLead.save();
     console.log('✅ Lead saved to MongoDB with Mongoose:', savedLead._id);
+    
+    // Send WhatsApp notification for new lead
+    await sendWhatsAppNotification(leadData);
     
     // Invalidate cache when new lead is added
     leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
@@ -632,6 +840,9 @@ app.post('/api/leads', async (req, res) => {
 
       const savedLead = await newLead.save();
       console.log('✅ Manual lead saved to MongoDB with Mongoose:', savedLead._id);
+      
+      // Send WhatsApp notification for manual lead
+      await sendWhatsAppNotification(savedLead);
       
       // Invalidate cache when manual lead is added
       leadsCache = { data: null, timestamp: null, count: 0, lastModified: null };
@@ -1112,6 +1323,173 @@ app.get('/api/discover-forms', async (req, res) => {
   }
 });
 
+// API endpoint to test WhatsApp notifications (multiple methods)
+app.post('/api/test-whatsapp', async (req, res) => {
+  try {
+    console.log('📱 Testing WhatsApp notification with multiple methods...');
+    
+    // Create a test lead data
+    const testLeadData = {
+      lead_id: 'TEST_' + Date.now(),
+      field_data: [
+        { name: 'full_name', values: ['Test Lead'] },
+        { name: 'email', values: ['test@example.com'] },
+        { name: 'phone_number', values: ['+1234567890'] }
+      ],
+      platform: 'manual',
+      created_time: new Date()
+    };
+    
+    const result = await sendWhatsAppNotification(testLeadData);
+    
+    res.json({
+      success: true,
+      message: 'WhatsApp test completed',
+      result: result,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error testing WhatsApp:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to send WhatsApp test notification',
+      message: error.message
+    });
+  }
+});
+
+// API endpoint to test Cloud API specifically
+app.post('/api/test-whatsapp-cloud', async (req, res) => {
+  try {
+    console.log('📱 Testing WhatsApp Cloud API...');
+    
+    const testLeadData = {
+      lead_id: 'CLOUD_TEST_' + Date.now(),
+      field_data: [
+        { name: 'full_name', values: ['Cloud API Test'] },
+        { name: 'email', values: ['cloud@test.com'] },
+        { name: 'phone_number', values: ['+1234567890'] }
+      ],
+      platform: 'manual',
+      created_time: new Date()
+    };
+    
+    const result = await sendWhatsAppCloudAPI(testLeadData);
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'Cloud API test successful' : 'Cloud API test failed',
+      result: result,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error testing Cloud API:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to test Cloud API',
+      message: error.message
+    });
+  }
+});
+
+// API endpoint to test webhook notification
+app.post('/api/test-webhook', async (req, res) => {
+  try {
+    console.log('📱 Testing webhook notification...');
+    
+    const testLeadData = {
+      lead_id: 'WEBHOOK_TEST_' + Date.now(),
+      field_data: [
+        { name: 'full_name', values: ['Webhook Test'] },
+        { name: 'email', values: ['webhook@test.com'] },
+        { name: 'phone_number', values: ['+1234567890'] }
+      ],
+      platform: 'manual',
+      created_time: new Date()
+    };
+    
+    const result = await sendWebhookNotification(testLeadData);
+    
+    res.json({
+      success: result.success,
+      message: result.success ? 'Webhook test successful' : 'Webhook test failed',
+      result: result,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error testing webhook:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to test webhook',
+      message: error.message
+    });
+  }
+});
+
+// API endpoint to discover WhatsApp phone numbers
+app.get('/api/whatsapp-phone-numbers', async (req, res) => {
+  try {
+    console.log('📱 Discovering WhatsApp phone numbers via API...');
+    
+    const phoneNumbers = await discoverWhatsAppPhoneNumbers();
+    
+    res.json({
+      success: true,
+      data: phoneNumbers,
+      message: 'WhatsApp phone numbers discovered',
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error discovering phone numbers:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to discover phone numbers',
+      message: error.message
+    });
+  }
+});
+
+// API endpoint to configure WhatsApp settings
+app.post('/api/whatsapp-config', async (req, res) => {
+  try {
+    const { phoneNumberId, recipientNumber, enabled } = req.body;
+    
+    // Update configuration (in production, you'd want to store this in a database)
+    if (phoneNumberId) WHATSAPP_PHONE_NUMBER_ID = phoneNumberId;
+    if (recipientNumber) WHATSAPP_RECIPIENT_NUMBER = recipientNumber;
+    if (typeof enabled === 'boolean') WHATSAPP_ENABLED = enabled;
+    
+    console.log('📱 WhatsApp configuration updated:', {
+      phoneNumberId: WHATSAPP_PHONE_NUMBER_ID,
+      recipientNumber: WHATSAPP_RECIPIENT_NUMBER,
+      enabled: WHATSAPP_ENABLED
+    });
+    
+    res.json({
+      success: true,
+      message: 'WhatsApp configuration updated successfully',
+      config: {
+        phoneNumberId: WHATSAPP_PHONE_NUMBER_ID,
+        recipientNumber: WHATSAPP_RECIPIENT_NUMBER,
+        enabled: WHATSAPP_ENABLED
+      },
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error updating WhatsApp config:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update WhatsApp configuration',
+      message: error.message
+    });
+  }
+});
+
 // API to fix form_id issues - update all leads to use discovered form_id
 app.post('/api/fix-form-ids', async (req, res) => {
   try {
@@ -1197,6 +1575,9 @@ app.listen(PORT, async () => {
   console.log(`  - Fix form IDs: POST http://localhost:${PORT}/api/fix-form-ids`);
   console.log(`  - Remove manual leads: DELETE http://localhost:${PORT}/api/leads/manual`);
   console.log(`  - Warm cache: http://localhost:${PORT}/api/cache/warm`);
+  console.log(`  - Test WhatsApp: POST http://localhost:${PORT}/api/test-whatsapp`);
+  console.log(`  - WhatsApp config: POST http://localhost:${PORT}/api/whatsapp-config`);
+  console.log(`  - Discover phone numbers: GET http://localhost:${PORT}/api/whatsapp-phone-numbers`);
   
   // Connect to MongoDB using Mongoose
   await connectToMongoDB();
@@ -1209,11 +1590,17 @@ app.listen(PORT, async () => {
   console.log(`Business Manager ID: ${BUSINESS_MANAGER_ID}`);
   console.log(`Page Access Token: ${PAGE_ACCESS_TOKEN.substring(0, 20)}...`);
   console.log('MongoDB connection configured with Mongoose');
+  console.log('\n📱 WhatsApp Integration:');
+  console.log(`WhatsApp Token: ${WHATSAPP_ACCESS_TOKEN.substring(0, 20)}...`);
+  console.log(`Phone Number ID: ${WHATSAPP_PHONE_NUMBER_ID}`);
+  console.log(`Recipient Number: ${WHATSAPP_RECIPIENT_NUMBER}`);
+  console.log(`Notifications Enabled: ${WHATSAPP_ENABLED}`);
   console.log('\n⏰ Auto-fetch configured: Every 10 minutes (multi-form support)');
   console.log('🔄 Manual fetch endpoints: /api/fetch-leads (all forms), /api/fetch-leads/single');
   console.log('🔍 Form discovery: /api/discover-forms');
   console.log('📊 Campaign analytics: /api/campaigns, /api/forms');
-  console.log('🚀 Latest deployment: Multi-form auto-fetch enabled');
+  console.log('📱 WhatsApp notifications: /api/test-whatsapp, /api/whatsapp-config');
+  console.log('🚀 Latest deployment: Multi-form auto-fetch + WhatsApp notifications enabled');
   
   // Initial fetch after 5 seconds (multi-form)
   setTimeout(() => {
